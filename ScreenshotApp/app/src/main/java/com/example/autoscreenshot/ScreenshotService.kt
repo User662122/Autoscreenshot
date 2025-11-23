@@ -177,32 +177,68 @@ class ScreenshotService : Service() {
         try {
             // Use Pictures directory for better compatibility
             val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            Log.d(TAG, "Pictures directory: ${picturesDir?.absolutePath}")
+            
             val folder = File(picturesDir, "AutoScreenshot")
             
             if (!folder.exists()) {
-                folder.mkdirs()
+                val created = folder.mkdirs()
+                Log.d(TAG, "Folder created: $created at ${folder.absolutePath}")
+            }
+            
+            if (!folder.canWrite()) {
+                Log.e(TAG, "Cannot write to folder: ${folder.absolutePath}")
+                showNotification("Screenshot Error", "Cannot write to storage. Check permissions.")
+                return
             }
             
             val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
             val fileName = "screenshot_${dateFormat.format(Date())}.png"
             val file = File(folder, fileName)
             
+            Log.d(TAG, "Attempting to save to: ${file.absolutePath}")
+            
             FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                val compressed = bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
                 out.flush()
+                Log.d(TAG, "Bitmap compressed: $compressed")
             }
             
-            Log.d(TAG, "Screenshot saved to: ${file.absolutePath}")
-            
-            // Notify media scanner
-            val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-            val contentUri = Uri.fromFile(file)
-            mediaScanIntent.data = contentUri
-            sendBroadcast(mediaScanIntent)
+            if (file.exists()) {
+                Log.d(TAG, "Screenshot saved successfully: ${file.absolutePath} (Size: ${file.length()} bytes)")
+                showNotification("Screenshot Saved", "Saved to ${file.name}")
+                
+                // Notify media scanner
+                val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+                val contentUri = Uri.fromFile(file)
+                mediaScanIntent.data = contentUri
+                sendBroadcast(mediaScanIntent)
+            } else {
+                Log.e(TAG, "File was not created: ${file.absolutePath}")
+                showNotification("Screenshot Error", "File was not created")
+            }
             
         } catch (e: Exception) {
             Log.e(TAG, "Error saving bitmap: ${e.message}")
             e.printStackTrace()
+            showNotification("Screenshot Error", "Error: ${e.message}")
+        }
+    }
+    
+    private fun showNotification(title: String, message: String) {
+        try {
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setAutoCancel(true)
+                .build()
+            
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing notification: ${e.message}")
         }
     }
     
