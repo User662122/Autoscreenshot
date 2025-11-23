@@ -141,7 +141,7 @@ class ScreenshotService : Service() {
                 if (bitmap != null) {
 
                     // FIRST CROP (Original region)
-                    val cropped = cropBitmap(bitmap, 11, 504, 709, 1201)
+                    val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
 
                     // SAVE 64 PIECES, 96×96 EACH
                     save64Pieces(cropped)
