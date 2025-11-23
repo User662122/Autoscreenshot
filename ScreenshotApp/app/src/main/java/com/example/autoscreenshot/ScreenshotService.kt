@@ -67,7 +67,7 @@ class ScreenshotService : Service() {
             val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
             
-            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {}, handler)
                 override fun onStop() {
                     super.onStop()
                     Log.d(TAG, "MediaProjection stopped")
