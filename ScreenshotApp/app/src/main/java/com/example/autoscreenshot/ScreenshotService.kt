@@ -193,13 +193,13 @@ class ScreenshotService : Service() {
             }
             
             val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-            val fileName = "screenshot_${dateFormat.format(Date())}.png"
+            val fileName = "screenshot_${dateFormat.format(Date())}.jpg"
             val file = File(folder, fileName)
             
             Log.d(TAG, "Attempting to save to: ${file.absolutePath}")
             
             FileOutputStream(file).use { out ->
-                val compressed = bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                val compressed = bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
                 out.flush()
                 Log.d(TAG, "Bitmap compressed: $compressed")
             }
