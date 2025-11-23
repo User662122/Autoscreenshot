@@ -5,8 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -19,12 +21,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaProjectionManager: MediaProjectionManager
     
     private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.all { it.value }) {
             startMediaProjection()
         } else {
-            Toast.makeText(this, "Storage permission required", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Required permissions not granted", Toast.LENGTH_SHORT).show()
         }
     }
     
@@ -46,6 +48,9 @@ class MainActivity : AppCompatActivity() {
             binding.statusText.text = "Screenshot service started"
             binding.startButton.isEnabled = false
             binding.stopButton.isEnabled = true
+            Toast.makeText(this, "Screenshot service started successfully", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Media projection permission denied", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -65,31 +70,47 @@ class MainActivity : AppCompatActivity() {
             binding.statusText.text = "Screenshot service stopped"
             binding.startButton.isEnabled = true
             binding.stopButton.isEnabled = false
+            Toast.makeText(this, "Screenshot service stopped", Toast.LENGTH_SHORT).show()
         }
     }
     
     private fun checkPermissionsAndStart() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
+        val permissionsToRequest = mutableListOf<String>()
+        
+        // Check storage permissions for Android 10 and below
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
                 != PackageManager.PERMISSION_GRANTED) {
-                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
+                permissionsToRequest.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+            
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) 
+                != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
         }
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startMediaProjection()
-        } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) 
+        // Check notification permission for Android 13 and above
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) 
                 != PackageManager.PERMISSION_GRANTED) {
-                requestPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            } else {
-                startMediaProjection()
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
             }
+        }
+        
+        if (permissionsToRequest.isNotEmpty()) {
+            requestPermissionLauncher.launch(permissionsToRequest.toTypedArray())
+        } else {
+            startMediaProjection()
         }
     }
     
     private fun startMediaProjection() {
-        mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        try {
+            mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error starting media projection: ${e.message}", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+        }
     }
 }
