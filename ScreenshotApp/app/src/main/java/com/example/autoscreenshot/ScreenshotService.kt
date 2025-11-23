@@ -11,6 +11,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -115,7 +116,7 @@ class ScreenshotService : Service() {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface,
                 null,
-                handler
+                null
             )
             
             Log.d(TAG, "Virtual display setup completed")
@@ -195,7 +196,8 @@ class ScreenshotService : Service() {
             
             // Notify media scanner
             val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
-            mediaScanIntent.data = Uri.fromFile(file)
+            val contentUri = Uri.fromFile(file)
+            mediaScanIntent.data = contentUri
             sendBroadcast(mediaScanIntent)
             
         } catch (e: Exception) {
