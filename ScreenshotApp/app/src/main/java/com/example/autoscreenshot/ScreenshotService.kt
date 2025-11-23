@@ -125,6 +125,47 @@ class ScreenshotService : Service() {
             e.printStackTrace()
         }
     }
+    private fun drawBoxGrid(bitmap: Bitmap, x1: Int, y1: Int, x2: Int, y2: Int): Bitmap {
+    val mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+    val canvas = Canvas(mutableBitmap)
+
+    val paint = Paint().apply {
+        color = Color.RED
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    val paintThin = Paint().apply {
+        color = Color.RED
+        strokeWidth = 1.5f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    // Outer box
+    canvas.drawRect(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), paint)
+
+    val boxW = (x2 - x1).toFloat()
+    val boxH = (y2 - y1).toFloat()
+
+    val cellW = boxW / 8f
+    val cellH = boxH / 8f
+
+    // Vertical lines
+    for (i in 1 until 8) {
+        val x = x1 + i * cellW
+        canvas.drawLine(x, y1.toFloat(), x, y2.toFloat(), paintThin)
+    }
+
+    // Horizontal lines
+    for (i in 1 until 8) {
+        val y = y1 + i * cellH
+        canvas.drawLine(x1.toFloat(), y, x2.toFloat(), y, paintThin)
+    }
+
+    return mutableBitmap
+    }
     
     private fun captureScreenshot() {
         try {
@@ -135,21 +176,18 @@ class ScreenshotService : Service() {
                 image.close()
                 
                 if (bitmap != null) {
-                    saveBitmap(bitmap)
-                    bitmap.recycle()
-                    Log.d(TAG, "Screenshot saved successfully")
-                } else {
-                    Log.e(TAG, "Failed to convert image to bitmap")
-                }
-            } else {
-                Log.d(TAG, "No image available")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error capturing screenshot: ${e.message}")
-            e.printStackTrace()
-        }
-    }
-    
+
+    // ⭐ YAHAN BOX + GRID BANANE KA STEP CHIPKA
+    val finalBitmap = drawBoxGrid(bitmap, 11, 504, 709, 1201)
+
+    saveBitmap(finalBitmap)
+
+    finalBitmap.recycle()
+    bitmap.recycle()
+
+    Log.d(TAG, "Screenshot saved successfully")
+}
+                   
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
             val planes = image.planes
