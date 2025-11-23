@@ -165,7 +165,7 @@ class ScreenshotService : Service() {
             )
             bitmap.copyPixelsFromBuffer(buffer)
             
-            Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
+            Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height, null, false)
         } catch (e: Exception) {
             Log.e(TAG, "Error converting image to bitmap: ${e.message}")
             e.printStackTrace()
