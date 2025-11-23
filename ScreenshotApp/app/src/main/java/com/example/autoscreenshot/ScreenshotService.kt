@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Canvas       // <-- added
+import android.graphics.Paint       // <-- added
+import android.graphics.Color       // <-- added
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -32,7 +35,7 @@ class ScreenshotService : Service() {
     private var imageReader: ImageReader? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isCapturing = false
-    
+
     private val screenshotRunnable = object : Runnable {
         override fun run() {
             if (isCapturing) {
@@ -41,32 +44,32 @@ class ScreenshotService : Service() {
             }
         }
     }
-    
+
     override fun onBind(intent: Intent?): IBinder? = null
-    
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         Log.d(TAG, "ScreenshotService created")
     }
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
-        
+
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
-        
+
         if (resultCode != Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Invalid result code or data")
             stopSelf()
             return START_NOT_STICKY
         }
-        
+
         try {
             val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-            
+
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
                     super.onStop()
@@ -74,7 +77,7 @@ class ScreenshotService : Service() {
                     stopSelf()
                 }
             }, handler)
-            
+
             setupVirtualDisplay()
             isCapturing = true
             handler.post(screenshotRunnable)
@@ -84,30 +87,30 @@ class ScreenshotService : Service() {
             e.printStackTrace()
             stopSelf()
         }
-        
+
         return START_STICKY
     }
-    
+
     private fun setupVirtualDisplay() {
         try {
             val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val metrics = DisplayMetrics()
-            
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 display?.getRealMetrics(metrics)
             } else {
                 @Suppress("DEPRECATION")
                 windowManager.defaultDisplay.getRealMetrics(metrics)
             }
-            
+
             val width = metrics.widthPixels
             val height = metrics.heightPixels
             val density = metrics.densityDpi
-            
+
             Log.d(TAG, "Display metrics: $width x $height, density: $density")
-            
+
             imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-            
+
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "ScreenCapture",
                 width,
@@ -118,55 +121,14 @@ class ScreenshotService : Service() {
                 null,
                 null
             )
-            
+
             Log.d(TAG, "Virtual display setup completed")
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up virtual display: ${e.message}")
             e.printStackTrace()
         }
     }
-    private fun drawBoxGrid(bitmap: Bitmap, x1: Int, y1: Int, x2: Int, y2: Int): Bitmap {
-    val mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-    val canvas = Canvas(mutableBitmap)
 
-    val paint = Paint().apply {
-        color = Color.RED
-        strokeWidth = 4f
-        style = Paint.Style.STROKE
-        isAntiAlias = true
-    }
-
-    val paintThin = Paint().apply {
-        color = Color.RED
-        strokeWidth = 1.5f
-        style = Paint.Style.STROKE
-        isAntiAlias = true
-    }
-
-    // Outer box
-    canvas.drawRect(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), paint)
-
-    val boxW = (x2 - x1).toFloat()
-    val boxH = (y2 - y1).toFloat()
-
-    val cellW = boxW / 8f
-    val cellH = boxH / 8f
-
-    // Vertical lines
-    for (i in 1 until 8) {
-        val x = x1 + i * cellW
-        canvas.drawLine(x, y1.toFloat(), x, y2.toFloat(), paintThin)
-    }
-
-    // Horizontal lines
-    for (i in 1 until 8) {
-        val y = y1 + i * cellH
-        canvas.drawLine(x1.toFloat(), y, x2.toFloat(), y, paintThin)
-    }
-
-    return mutableBitmap
-    }
-    
     private fun captureScreenshot() {
         try {
             val image = imageReader?.acquireLatestImage()
@@ -174,20 +136,28 @@ class ScreenshotService : Service() {
                 Log.d(TAG, "Image acquired successfully")
                 val bitmap = imageToBitmap(image)
                 image.close()
-                
+
                 if (bitmap != null) {
 
-    // ⭐ YAHAN BOX + GRID BANANE KA STEP CHIPKA
-    val finalBitmap = drawBoxGrid(bitmap, 11, 504, 709, 1201)
+                    // ⭐ ADDITION: draw grid + box BEFORE saving
+                    val finalBitmap = drawBoxGrid(bitmap, 11, 504, 709, 1201)
 
-    saveBitmap(finalBitmap)
+                    saveBitmap(finalBitmap)
+                    finalBitmap.recycle()
 
-    finalBitmap.recycle()
-    bitmap.recycle()
+                    Log.d(TAG, "Screenshot saved successfully")
+                } else {
+                    Log.e(TAG, "Failed to convert image to bitmap")
+                }
+            } else {
+                Log.d(TAG, "No image available")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error capturing screenshot: ${e.message}")
+            e.printStackTrace()
+        }
+    }
 
-    Log.d(TAG, "Screenshot saved successfully")
-}
-                   
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
             val planes = image.planes
@@ -195,14 +165,14 @@ class ScreenshotService : Service() {
             val pixelStride = planes[0].pixelStride
             val rowStride = planes[0].rowStride
             val rowPadding = rowStride - pixelStride * image.width
-            
+
             val bitmap = Bitmap.createBitmap(
                 image.width + rowPadding / pixelStride,
                 image.height,
                 Bitmap.Config.ARGB_8888
             )
             bitmap.copyPixelsFromBuffer(buffer)
-            
+
             Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
         } catch (e: Exception) {
             Log.e(TAG, "Error converting image to bitmap: ${e.message}")
@@ -210,43 +180,41 @@ class ScreenshotService : Service() {
             null
         }
     }
-    
+
     private fun saveBitmap(bitmap: Bitmap) {
         try {
-            // Use Pictures directory for better compatibility
             val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
             Log.d(TAG, "Pictures directory: ${picturesDir?.absolutePath}")
-            
+
             val folder = File(picturesDir, "AutoScreenshot")
-            
+
             if (!folder.exists()) {
                 val created = folder.mkdirs()
                 Log.d(TAG, "Folder created: $created at ${folder.absolutePath}")
             }
-            
+
             if (!folder.canWrite()) {
                 Log.e(TAG, "Cannot write to folder: ${folder.absolutePath}")
                 showNotification("Screenshot Error", "Cannot write to storage. Check permissions.")
                 return
             }
-            
+
             val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
             val fileName = "screenshot_${dateFormat.format(Date())}.jpg"
             val file = File(folder, fileName)
-            
+
             Log.d(TAG, "Attempting to save to: ${file.absolutePath}")
-            
+
             FileOutputStream(file).use { out ->
                 val compressed = bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
                 out.flush()
                 Log.d(TAG, "Bitmap compressed: $compressed")
             }
-            
+
             if (file.exists()) {
                 Log.d(TAG, "Screenshot saved successfully: ${file.absolutePath} (Size: ${file.length()} bytes)")
                 showNotification("Screenshot Saved", "Saved to ${file.name}")
-                
-                // Notify media scanner
+
                 val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
                 val contentUri = Uri.fromFile(file)
                 mediaScanIntent.data = contentUri
@@ -255,14 +223,14 @@ class ScreenshotService : Service() {
                 Log.e(TAG, "File was not created: ${file.absolutePath}")
                 showNotification("Screenshot Error", "File was not created")
             }
-            
+
         } catch (e: Exception) {
             Log.e(TAG, "Error saving bitmap: ${e.message}")
             e.printStackTrace()
             showNotification("Screenshot Error", "Error: ${e.message}")
         }
     }
-    
+
     private fun showNotification(title: String, message: String) {
         try {
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -272,14 +240,14 @@ class ScreenshotService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setAutoCancel(true)
                 .build()
-            
+
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.notify(System.currentTimeMillis().toInt(), notification)
         } catch (e: Exception) {
             Log.e(TAG, "Error showing notification: ${e.message}")
         }
     }
-    
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -290,12 +258,12 @@ class ScreenshotService : Service() {
                 description = "Taking screenshots every 5 seconds"
                 setShowBadge(false)
             }
-            
+
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
         }
     }
-    
+
     private fun createNotification(): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -304,7 +272,7 @@ class ScreenshotService : Service() {
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Screenshot Service")
             .setContentText("Taking screenshots every 5 seconds")
@@ -314,7 +282,7 @@ class ScreenshotService : Service() {
             .setOnlyAlertOnce(true)
             .build()
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "ScreenshotService destroying")
@@ -325,10 +293,54 @@ class ScreenshotService : Service() {
         mediaProjection?.stop()
         Log.d(TAG, "ScreenshotService destroyed")
     }
-    
+
     companion object {
         private const val TAG = "ScreenshotService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "screenshot_service_channel"
+    }
+
+    // ⭐ FULL ANDROID GRID + BOX DRAW FUNCTION (same as your Python logic)
+    private fun drawBoxGrid(bitmap: Bitmap, x1: Int, y1: Int, x2: Int, y2: Int): Bitmap {
+        val mutable = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(mutable)
+
+        val thick = Paint().apply {
+            color = Color.RED
+            strokeWidth = 4f
+            style = Paint.Style.STROKE
+            isAntiAlias = true
+        }
+
+        val thin = Paint().apply {
+            color = Color.RED
+            strokeWidth = 1.6f
+            style = Paint.Style.STROKE
+            isAntiAlias = true
+        }
+
+        canvas.drawRect(
+            x1.toFloat(), y1.toFloat(),
+            x2.toFloat(), y2.toFloat(),
+            thick
+        )
+
+        val w = (x2 - x1).toFloat()
+        val h = (y2 - y1).toFloat()
+
+        val cw = w / 8f
+        val ch = h / 8f
+
+        for (i in 1 until 8) {
+            val x = x1 + i * cw
+            canvas.drawLine(x, y1.toFloat(), x, y2.toFloat(), thin)
+        }
+
+        for (i in 1 until 8) {
+            val y = y1 + i * ch
+            canvas.drawLine(x1.toFloat(), y, x2.toFloat(), y, thin)
+        }
+
+        return mutable
     }
 }
