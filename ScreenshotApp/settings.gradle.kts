@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ChessMoveDetector"
+rootProject.name = "ScreenshotApp"
 include(":app")
