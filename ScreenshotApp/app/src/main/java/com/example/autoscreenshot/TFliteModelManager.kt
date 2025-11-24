@@ -56,7 +56,8 @@ class TFLiteModelManager(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-    fun classifyChessBoard(pieces: List<Bitmap>, context: Context) {
+    // ✅ MODIFIED: Added callback parameter to return UCI mapping
+    fun classifyChessBoard(pieces: List<Bitmap>, context: Context, callback: (String) -> Unit = {}) {
         if (interpreter == null) {
             Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
             return
@@ -77,7 +78,10 @@ class TFLiteModelManager(context: Context) {
             }
             
             // Create UCI mapping and display
-            displayUCIResult(classifications, context)
+            val uciMapping = createUCIResult(classifications, context)
+            
+            // ✅ NEW: Invoke callback with the result
+            callback(uciMapping)
             
         } catch (e: Exception) {
             e.printStackTrace()
@@ -122,7 +126,8 @@ class TFLiteModelManager(context: Context) {
         return inputBuffer
     }
 
-    private fun displayUCIResult(classifications: List<String>, context: Context) {
+    // ✅ MODIFIED: Renamed from displayUCIResult to createUCIResult and returns the mapping string
+    private fun createUCIResult(classifications: List<String>, context: Context): String {
         // Build FEN-like representation
         val whitePieces = mutableListOf<String>()
         val blackPieces = mutableListOf<String>()
@@ -149,6 +154,8 @@ class TFLiteModelManager(context: Context) {
         // Also log for debugging
         android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
         android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
+        
+        return message  // ✅ Return the mapping string
     }
 
     fun getInterpreter(): Interpreter? {
