@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.chessmove.detector"
+    namespace = "com.example.autoscreenshot"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.chessmove.detector"
+        applicationId = "com.example.autoscreenshot"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
