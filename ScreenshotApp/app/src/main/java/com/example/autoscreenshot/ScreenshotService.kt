@@ -220,6 +220,10 @@ class ScreenshotService : Service() {
                 // ✅ Store the mapping for future use
                 storedUCIMapping = uciMapping
                 hasStoredMapping = true
+                
+                // ✅ NEW: Update singleton variable
+                UCIManager.currentUCI = uciMapping
+                
                 Log.d(TAG, "UCI mapping stored: $uciMapping")
                 
                 // Show notification with the mapping
@@ -228,6 +232,10 @@ class ScreenshotService : Service() {
         } else {
             // ✅ Use stored mapping without reclassification
             Log.d(TAG, "Using stored UCI mapping: $storedUCIMapping")
+            
+            // ✅ NEW: Update singleton variable with stored mapping
+            UCIManager.currentUCI = storedUCIMapping
+            
             showNotification("Chess Board", storedUCIMapping ?: "No mapping available")
         }
         
