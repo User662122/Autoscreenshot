@@ -35,7 +35,11 @@ class ScreenshotService : Service() {
     private var imageReader: ImageReader? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isCapturing = false
-    private lateinit var modelManager: TFLiteModelManager  // ✅ CORRECTED: Inside class
+    private lateinit var modelManager: TFLiteModelManager
+    
+    // ✅ NEW: Store UCI mapping to avoid recalculation
+    private var storedUCIMapping: String? = null
+    private var hasStoredMapping = false
 
     private val screenshotRunnable = object : Runnable {
         override fun run() {
@@ -58,6 +62,10 @@ class ScreenshotService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
+
+        // ✅ NEW: Reset stored mapping when service starts fresh
+        storedUCIMapping = null
+        hasStoredMapping = false
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -147,7 +155,7 @@ class ScreenshotService : Service() {
                     // SAVE 64 PIECES, 96×96 EACH
                     save64Pieces(cropped)
 
-                    Log.d(TAG, "64 screenshot pieces saved successfully")
+                    Log.d(TAG, "64 screenshot pieces processed successfully")
                 } else {
                     Log.e(TAG, "Failed to convert image to bitmap")
                 }
@@ -187,36 +195,45 @@ class ScreenshotService : Service() {
         return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
     }
 
-    // ⭐ NEW FUNCTION — Save 64 PIECES (each 96x96)
     // ⭐ MODIFIED FUNCTION — Process 64 PIECES in RAM only (no saving)
-private fun save64Pieces(bmp: Bitmap) {
-    val cellW = bmp.width / 8
-    val cellH = bmp.height / 8
-    val pieces = mutableListOf<Bitmap>()
+    private fun save64Pieces(bmp: Bitmap) {
+        val cellW = bmp.width / 8
+        val cellH = bmp.height / 8
+        val pieces = mutableListOf<Bitmap>()
 
-    for (r in 0 until 8) {
-        for (c in 0 until 8) {
-            val x = c * cellW
-            val y = r * cellH
+        for (r in 0 until 8) {
+            for (c in 0 until 8) {
+                val x = c * cellW
+                val y = r * cellH
 
-            val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
-            val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-            
-            pieces.add(resized)
-            
-            // REMOVED: saveBitmap(resized, "piece_${r}_${c}")
-
-            piece.recycle()
+                val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
+                val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+                
+                pieces.add(resized)
+                piece.recycle()
+            }
         }
+        
+        // ✅ MODIFIED: Only classify if we don't have stored mapping
+        if (!hasStoredMapping || storedUCIMapping == null) {
+            modelManager.classifyChessBoard(pieces, this) { uciMapping ->
+                // ✅ Store the mapping for future use
+                storedUCIMapping = uciMapping
+                hasStoredMapping = true
+                Log.d(TAG, "UCI mapping stored: $uciMapping")
+                
+                // Show notification with the mapping
+                showNotification("Chess Board Detected", uciMapping)
+            }
+        } else {
+            // ✅ Use stored mapping without reclassification
+            Log.d(TAG, "Using stored UCI mapping: $storedUCIMapping")
+            showNotification("Chess Board", storedUCIMapping ?: "No mapping available")
+        }
+        
+        // Clean up
+        pieces.forEach { it.recycle() }
     }
-    
-    // Classify all pieces and show UCI mapping
-    modelManager.classifyChessBoard(pieces, this)
-    
-    // Clean up
-    pieces.forEach { it.recycle() }
-}
-
     
     private fun showNotification(title: String, message: String) {
         try {
@@ -278,7 +295,12 @@ private fun save64Pieces(bmp: Bitmap) {
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()
-        modelManager.close()  // ✅ Added: Close model manager
+        modelManager.close()
+        
+        // ✅ NEW: Clear stored mapping when service stops
+        storedUCIMapping = null
+        hasStoredMapping = false
+        
         Log.d(TAG, "ScreenshotService destroyed")
     }
 
