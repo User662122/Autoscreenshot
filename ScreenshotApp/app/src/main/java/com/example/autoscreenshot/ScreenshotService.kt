@@ -28,6 +28,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+private lateinit var modelManager: TFLiteModelManager
 
 class ScreenshotService : Service() {
     private var mediaProjection: MediaProjection? = null
@@ -48,12 +49,12 @@ class ScreenshotService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
-        Log.d(TAG, "ScreenshotService created")
-    }
-
+    super.onCreate()
+    createNotificationChannel()
+    startForeground(NOTIFICATION_ID, createNotification())
+    modelManager = TFLiteModelManager(this)
+    Log.d(TAG, "ScreenshotService created")
+}
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
 
@@ -188,67 +189,57 @@ class ScreenshotService : Service() {
 
     // ⭐ NEW FUNCTION — Save 64 PIECES (each 96x96)
     private fun save64Pieces(bmp: Bitmap) {
-        val cellW = bmp.width / 8
-        val cellH = bmp.height / 8
+    val cellW = bmp.width / 8
+    val cellH = bmp.height / 8
+    val pieces = mutableListOf<Bitmap>()
 
-        for (r in 0 until 8) {
-            for (c in 0 until 8) {
-                val x = c * cellW
-                val y = r * cellH
+    for (r in 0 until 8) {
+        for (c in 0 until 8) {
+            val x = c * cellW
+            val y = r * cellH
 
-                val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
+            val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
+            val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+            
+            pieces.add(resized)
+            
+            // Save individual piece (optional)
+            saveBitmap(resized, "piece_${r}_${c}")
 
-                val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-
-                saveBitmap(resized)
-
-                piece.recycle()
-                resized.recycle()
-            }
+            piece.recycle()
         }
     }
+    
+    // Classify all pieces and show UCI mapping
+    modelManager.classifyChessBoard(pieces, this)
+    
+    // Clean up
+    pieces.forEach { it.recycle() }
+}
+    private fun saveBitmap(bitmap: Bitmap, customName: String? = null) {
+    try {
+        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        val folder = File(picturesDir, "AutoScreenshot")
 
-    private fun saveBitmap(bitmap: Bitmap) {
-        try {
-            val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-            Log.d(TAG, "Pictures directory: ${picturesDir?.absolutePath}")
-
-            val folder = File(picturesDir, "AutoScreenshot")
-
-            if (!folder.exists()) {
-                val created = folder.mkdirs()
-                Log.d(TAG, "Folder created: $created at ${folder.absolutePath}")
-            }
-
-            if (!folder.canWrite()) {
-                Log.e(TAG, "Cannot write to folder: ${folder.absolutePath}")
-                showNotification("Screenshot Error", "Cannot write to storage. Check permissions.")
-                return
-            }
-
-            val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault())
-            val fileName = "piece_${dateFormat.format(Date())}.jpg"
-            val file = File(folder, fileName)
-
-            Log.d(TAG, "Attempting to save to: ${file.absolutePath}")
-
-            FileOutputStream(file).use { out ->
-                val compressed = bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
-                out.flush()
-                Log.d(TAG, "Bitmap compressed: $compressed")
-            }
-
-            if (file.exists()) {
-                Log.d(TAG, "Saved successfully: ${file.absolutePath}")
-            } else {
-                Log.e(TAG, "File not created: ${file.absolutePath}")
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error saving bitmap: ${e.message}")
-            e.printStackTrace()
-            showNotification("Screenshot Error", "Error: ${e.message}")
+        if (!folder.exists()) {
+            folder.mkdirs()
         }
+
+        val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault())
+        val fileName = customName?.let { "${it}.jpg" } ?: "piece_${dateFormat.format(Date())}.jpg"
+        val file = File(folder, fileName)
+
+        FileOutputStream(file).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            out.flush()
+        }
+
+        Log.d(TAG, "Saved: ${file.absolutePath}")
+
+    } catch (e: Exception) {
+        Log.e(TAG, "Error saving bitmap: ${e.message}")
+        e.printStackTrace()
+    }
     }
 
     private fun showNotification(title: String, message: String) {
