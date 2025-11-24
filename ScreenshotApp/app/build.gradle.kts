@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.autoscreenshot"
+    namespace = "com.chessmove.detector"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.autoscreenshot"
+        applicationId = "com.chessmove.detector"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -38,6 +38,9 @@ android {
         viewBinding = true
     }
 
+    aaptOptions {
+        noCompress("tflite")
+    }
 }
 
 dependencies {
@@ -46,11 +49,16 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     
-    
-    
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    
+    // OkHttp
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    
+    // TensorFlow Lite
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.14.0")
 }
-    
-    
