@@ -28,7 +28,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
-private lateinit var modelManager: TFLiteModelManager
 
 class ScreenshotService : Service() {
     private var mediaProjection: MediaProjection? = null
@@ -36,6 +35,7 @@ class ScreenshotService : Service() {
     private var imageReader: ImageReader? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isCapturing = false
+    private lateinit var modelManager: TFLiteModelManager  // ✅ CORRECTED: Inside class
 
     private val screenshotRunnable = object : Runnable {
         override fun run() {
@@ -49,12 +49,13 @@ class ScreenshotService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
-    super.onCreate()
-    createNotificationChannel()
-    startForeground(NOTIFICATION_ID, createNotification())
-    modelManager = TFLiteModelManager(this)
-    Log.d(TAG, "ScreenshotService created")
-}
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, createNotification())
+        modelManager = TFLiteModelManager(this)
+        Log.d(TAG, "ScreenshotService created")
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
 
@@ -140,7 +141,6 @@ class ScreenshotService : Service() {
                 image.close()
 
                 if (bitmap != null) {
-
                     // FIRST CROP (Original region)
                     val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
 
@@ -189,57 +189,58 @@ class ScreenshotService : Service() {
 
     // ⭐ NEW FUNCTION — Save 64 PIECES (each 96x96)
     private fun save64Pieces(bmp: Bitmap) {
-    val cellW = bmp.width / 8
-    val cellH = bmp.height / 8
-    val pieces = mutableListOf<Bitmap>()
+        val cellW = bmp.width / 8
+        val cellH = bmp.height / 8
+        val pieces = mutableListOf<Bitmap>()
 
-    for (r in 0 until 8) {
-        for (c in 0 until 8) {
-            val x = c * cellW
-            val y = r * cellH
+        for (r in 0 until 8) {
+            for (c in 0 until 8) {
+                val x = c * cellW
+                val y = r * cellH
 
-            val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
-            val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-            
-            pieces.add(resized)
-            
-            // Save individual piece (optional)
-            saveBitmap(resized, "piece_${r}_${c}")
+                val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
+                val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+                
+                pieces.add(resized)
+                
+                // Save individual piece (optional)
+                saveBitmap(resized, "piece_${r}_${c}")
 
-            piece.recycle()
+                piece.recycle()
+            }
         }
+        
+        // Classify all pieces and show UCI mapping
+        modelManager.classifyChessBoard(pieces, this)
+        
+        // Clean up
+        pieces.forEach { it.recycle() }
     }
-    
-    // Classify all pieces and show UCI mapping
-    modelManager.classifyChessBoard(pieces, this)
-    
-    // Clean up
-    pieces.forEach { it.recycle() }
-}
+
     private fun saveBitmap(bitmap: Bitmap, customName: String? = null) {
-    try {
-        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-        val folder = File(picturesDir, "AutoScreenshot")
+        try {
+            val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            val folder = File(picturesDir, "AutoScreenshot")
 
-        if (!folder.exists()) {
-            folder.mkdirs()
+            if (!folder.exists()) {
+                folder.mkdirs()
+            }
+
+            val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault())
+            val fileName = customName?.let { "${it}.jpg" } ?: "piece_${dateFormat.format(Date())}.jpg"
+            val file = File(folder, fileName)
+
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+                out.flush()
+            }
+
+            Log.d(TAG, "Saved: ${file.absolutePath}")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving bitmap: ${e.message}")
+            e.printStackTrace()
         }
-
-        val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault())
-        val fileName = customName?.let { "${it}.jpg" } ?: "piece_${dateFormat.format(Date())}.jpg"
-        val file = File(folder, fileName)
-
-        FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
-            out.flush()
-        }
-
-        Log.d(TAG, "Saved: ${file.absolutePath}")
-
-    } catch (e: Exception) {
-        Log.e(TAG, "Error saving bitmap: ${e.message}")
-        e.printStackTrace()
-    }
     }
 
     private fun showNotification(title: String, message: String) {
@@ -302,6 +303,7 @@ class ScreenshotService : Service() {
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()
+        modelManager.close()  // ✅ Added: Close model manager
         Log.d(TAG, "ScreenshotService destroyed")
     }
 
