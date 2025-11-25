@@ -67,8 +67,8 @@ class TFLiteModelManager(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-    // ✅ MODIFIED: Added callback parameter to return UCI mapping
-    fun classifyChessBoard(pieces: List<Bitmap>, context: Context, callback: (String) -> Unit = {}) {
+    // ✅ FIXED: Added orientation parameter and return both mapping AND orientation
+    fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
         if (interpreter == null) {
             Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
             return
@@ -88,11 +88,28 @@ class TFLiteModelManager(context: Context) {
                 classifications.add(classification)
             }
             
-            // Create UCI mapping and display
-            val uciMapping = createUCIResult(classifications, context)
+            // Determine orientation (use stored if available, otherwise detect)
+            val orientation = if (storedOrientation != null) {
+                storedOrientation
+            } else {
+                // Detect orientation based on bottom two rows
+                var blackCountBottom = 0
+                var whiteCountBottom = 0
+                
+                for (i in 48..63) {
+                    when (classifications[i]) {
+                        "White" -> whiteCountBottom++
+                        "Black" -> blackCountBottom++
+                    }
+                }
+                blackCountBottom <= whiteCountBottom // true = normal, false = reversed
+            }
             
-            // ✅ NEW: Invoke callback with the result
-            callback(uciMapping)
+            // Create UCI mapping with determined orientation
+            val uciMapping = createUCIResult(classifications, orientation, context)
+            
+            // ✅ FIXED: Return both mapping and orientation
+            callback(uciMapping, orientation)
             
         } catch (e: Exception) {
             e.printStackTrace()
@@ -137,27 +154,16 @@ class TFLiteModelManager(context: Context) {
         return inputBuffer
     }
 
-    // ✅ MODIFIED: Added logic to choose mapping based on bottom two rows
-    private fun createUCIResult(classifications: List<String>, context: Context): String {
-        // Count black and white pieces in bottom two rows (indices 48-63 in normal mapping)
-        var blackCountBottom = 0
-        var whiteCountBottom = 0
-        
-        for (i in 48..63) {
-            when (classifications[i]) {
-                "White" -> whiteCountBottom++
-                "Black" -> blackCountBottom++
-            }
-        }
-        
-        // Choose mapping based on the condition
-        val chessSquares = if (blackCountBottom > whiteCountBottom) {
-            chessSquaresReversed
-        } else {
+    // ✅ FIXED: Use provided orientation instead of detecting every time
+    private fun createUCIResult(classifications: List<String>, orientation: Boolean, context: Context): String {
+        // Choose mapping based on the provided orientation
+        val chessSquares = if (orientation) {
             chessSquaresNormal
+        } else {
+            chessSquaresReversed
         }
         
-        // Build FEN-like representation
+        // Build FEN-like representation with CURRENT piece positions
         val whitePieces = mutableListOf<String>()
         val blackPieces = mutableListOf<String>()
         
@@ -169,24 +175,24 @@ class TFLiteModelManager(context: Context) {
             }
         }
         
-        // Create display message
+        // Create display message with CURRENT positions
         val message = buildString {
             append("White: ")
             append(whitePieces.joinToString(", "))
             append("\nBlack: ")
             append(blackPieces.joinToString(", "))
-            append("\nMapping: ${if (blackCountBottom > whiteCountBottom) "Reversed (h-a)" else "Normal (a-h)"}")
+            append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
         }
         
-        // Show Toast with UCI mapping
+        // Show Toast with CURRENT UCI mapping
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         
         // Also log for debugging
         android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
         android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
-        android.util.Log.d("ChessClassification", "Bottom rows - Black: $blackCountBottom, White: $whiteCountBottom, Using: ${if (blackCountBottom > whiteCountBottom) "Reversed (h-a)" else "Normal (a-h)"} mapping")
+        android.util.Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
         
-        return message  // ✅ Return the mapping string
+        return message
     }
 
     fun getInterpreter(): Interpreter? {
