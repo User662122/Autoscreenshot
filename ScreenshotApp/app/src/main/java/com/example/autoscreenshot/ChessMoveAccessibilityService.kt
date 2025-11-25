@@ -63,6 +63,20 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     private fun startPollingForMoves() {
         serviceScope.launch {
+            // Wait for /start to be called first
+            while (isRunning) {
+                val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
+                
+                if (bottomColor.isNotEmpty()) {
+                    Log.d(TAG, "Start color detected: $bottomColor. Beginning move polling...")
+                    break
+                }
+                
+                Log.d(TAG, "Waiting for /start to be called...")
+                delay(3000)
+            }
+            
+            // Now start polling for moves
             while (isRunning) {
                 try {
                     val move = fetchMoveFromBackend()
