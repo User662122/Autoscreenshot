@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AutoScreenshot</string>
+    <string name="accessibility_service_description">
+        This service automatically plays chess moves by performing screen taps.
+        It polls the backend server for moves and executes them on the chess board.
+    </string>
+</resources>
