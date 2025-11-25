@@ -2,6 +2,7 @@ package com.example.autoscreenshot
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import android.widget.Toast
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
@@ -89,7 +90,8 @@ class TFLiteModelManager(context: Context) {
             }
             
             // ✅ NEW: First time detection - check which color is at bottom
-            val isFirstDetection = !Prefs.contains(context, "board_orientation_detected")
+            val bottomColorPref = Prefs.getString(context, "bottom_color", "")
+            val isFirstDetection = bottomColorPref.isEmpty()
             var detectedOrientation = storedOrientation
             
             if (isFirstDetection && storedOrientation == null) {
@@ -238,10 +240,10 @@ class TFLiteModelManager(context: Context) {
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         
         // Also log for debugging
-        android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
-        android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
-        android.util.Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
-        android.util.Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
+        Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
+        Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
+        Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
+        Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
         
         return message
     }
