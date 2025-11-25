@@ -6,6 +6,58 @@
     android:padding="16dp"
     android:gravity="center">
 
+    <!-- Ngrok URL Configuration Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Ngrok URL Configuration"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <EditText
+        android:id="@+id/urlEditText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Enter Ngrok URL (e.g., https://abc123.ngrok.io)"
+        android:inputType="textUri"
+        android:layout_marginBottom="8dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <Button
+            android:id="@+id/setUrlButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Set URL"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/clearUrlButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Clear"
+            android:layout_marginStart="8dp" />
+
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/currentUrlText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Current URL: Not Set"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Existing Screenshot Controls -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="wrap_content"
