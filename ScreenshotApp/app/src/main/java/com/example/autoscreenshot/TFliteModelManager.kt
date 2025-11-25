@@ -67,7 +67,7 @@ class TFLiteModelManager(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-    // ✅ FIXED: Added orientation parameter and return both mapping AND orientation
+    // ✅ MODIFIED: First time detection for board orientation
     fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
         if (interpreter == null) {
             Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
@@ -88,33 +88,70 @@ class TFLiteModelManager(context: Context) {
                 classifications.add(classification)
             }
             
-            // Determine orientation (use stored if available, otherwise detect)
-            val orientation = if (storedOrientation != null) {
-                storedOrientation
-            } else {
-                // Detect orientation based on bottom two rows
-                var blackCountBottom = 0
-                var whiteCountBottom = 0
+            // ✅ NEW: First time detection - check which color is at bottom
+            val isFirstDetection = !Prefs.contains(context, "board_orientation_detected")
+            var detectedOrientation = storedOrientation
+            
+            if (isFirstDetection && storedOrientation == null) {
+                // First time detection - determine which color is at bottom
+                val bottomColor = detectBottomColor(classifications)
                 
-                for (i in 48..63) {
-                    when (classifications[i]) {
-                        "White" -> whiteCountBottom++
-                        "Black" -> blackCountBottom++
-                    }
-                }
-                blackCountBottom <= whiteCountBottom // true = normal, false = reversed
+                // Save to SharedPreferences
+                Prefs.setString(context, "bottom_color", bottomColor)
+                Prefs.setString(context, "board_orientation_detected", "true")
+                
+                // Set orientation based on bottom color (White at bottom = normal, Black at bottom = reversed)
+                detectedOrientation = (bottomColor == "White")
+                
+                Toast.makeText(context, "First detection: $bottomColor pieces at bottom", Toast.LENGTH_LONG).show()
+                Log.d("ChessOrientation", "First detection: $bottomColor pieces at bottom, orientation: ${if (detectedOrientation) "normal" else "reversed"}")
+            } else if (storedOrientation == null) {
+                // Not first time, but no stored orientation - use default detection
+                detectedOrientation = detectOrientation(classifications)
             }
             
             // Create UCI mapping with determined orientation
-            val uciMapping = createUCIResult(classifications, orientation, context)
+            val uciMapping = createUCIResult(classifications, detectedOrientation ?: true, context)
             
-            // ✅ FIXED: Return both mapping and orientation
-            callback(uciMapping, orientation)
+            // Return both mapping and orientation
+            callback(uciMapping, detectedOrientation ?: true)
             
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(context, "Classification error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // ✅ NEW: Detect which color is at the bottom of the board
+    private fun detectBottomColor(classifications: List<String>): String {
+        // Check bottom two rows (rows 7 and 8 in normal chess notation)
+        // In our array indices: bottom rows are indices 48-63
+        
+        var whiteCountBottom = 0
+        var blackCountBottom = 0
+        
+        for (i in 48..63) {
+            when (classifications[i]) {
+                "White" -> whiteCountBottom++
+                "Black" -> blackCountBottom++
+            }
+        }
+        
+        return if (whiteCountBottom >= blackCountBottom) "White" else "Black"
+    }
+
+    // ✅ NEW: Default orientation detection (existing logic)
+    private fun detectOrientation(classifications: List<String>): Boolean {
+        var blackCountBottom = 0
+        var whiteCountBottom = 0
+        
+        for (i in 48..63) {
+            when (classifications[i]) {
+                "White" -> whiteCountBottom++
+                "Black" -> blackCountBottom++
+            }
+        }
+        return blackCountBottom <= whiteCountBottom // true = normal, false = reversed
     }
 
     private fun classifyBitmap(bitmap: Bitmap): String {
@@ -154,61 +191,60 @@ class TFLiteModelManager(context: Context) {
         return inputBuffer
     }
 
-    // ✅ FIXED: Use provided orientation instead of detecting every time
     private fun createUCIResult(classifications: List<String>, orientation: Boolean, context: Context): String {
-    // Choose mapping based on the provided orientation
-    val chessSquares = if (orientation) {
-        chessSquaresNormal
-    } else {
-        chessSquaresReversed
-    }
-    
-    // Build FEN-like representation with CURRENT piece positions
-    val whitePieces = mutableListOf<String>()
-    val blackPieces = mutableListOf<String>()
-    
-    for (i in classifications.indices) {
-        when (classifications[i]) {
-            "White" -> whitePieces.add(chessSquares[i])
-            "Black" -> blackPieces.add(chessSquares[i])
-            // Empty squares are not tracked
+        // Choose mapping based on the provided orientation
+        val chessSquares = if (orientation) {
+            chessSquaresNormal
+        } else {
+            chessSquaresReversed
         }
+        
+        // Build FEN-like representation with CURRENT piece positions
+        val whitePieces = mutableListOf<String>()
+        val blackPieces = mutableListOf<String>()
+        
+        for (i in classifications.indices) {
+            when (classifications[i]) {
+                "White" -> whitePieces.add(chessSquares[i])
+                "Black" -> blackPieces.add(chessSquares[i])
+                // Empty squares are not tracked
+            }
+        }
+        
+        // Create UCI format strings
+        val whiteUCI = whitePieces.joinToString(",")
+        val blackUCI = blackPieces.joinToString(",")
+        val mappingType = if (orientation) "normal" else "reversed"
+        
+        // Save to SharedPreferences using Prefs utility
+        Prefs.setString(context, "uci_white", whiteUCI)
+        Prefs.setString(context, "uci_black", blackUCI)
+        Prefs.setString(context, "uci_mapping", mappingType)
+        
+        // Create combined UCI string
+        val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
+        Prefs.setString(context, "uci", combinedUCI)
+        
+        // Create display message with CURRENT positions
+        val message = buildString {
+            append("White: ")
+            append(whitePieces.joinToString(", "))
+            append("\nBlack: ")
+            append(blackPieces.joinToString(", "))
+            append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
+        }
+        
+        // Show Toast with CURRENT UCI mapping
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        
+        // Also log for debugging
+        android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
+        android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
+        android.util.Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
+        android.util.Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
+        
+        return message
     }
-    
-    // Create UCI format strings
-    val whiteUCI = whitePieces.joinToString(",")
-    val blackUCI = blackPieces.joinToString(",")
-    val mappingType = if (orientation) "normal" else "reversed"
-    
-    // Save to SharedPreferences using Prefs utility
-    Prefs.setString(context, "uci_white", whiteUCI)
-    Prefs.setString(context, "uci_black", blackUCI)
-    Prefs.setString(context, "uci_mapping", mappingType)
-    
-    // Create combined UCI string
-    val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
-    Prefs.setString(context, "uci", combinedUCI)
-    
-    // Create display message with CURRENT positions
-    val message = buildString {
-        append("White: ")
-        append(whitePieces.joinToString(", "))
-        append("\nBlack: ")
-        append(blackPieces.joinToString(", "))
-        append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
-    }
-    
-    // Show Toast with CURRENT UCI mapping
-    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-    
-    // Also log for debugging
-    android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
-    android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
-    android.util.Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
-    android.util.Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
-    
-    return message
-}
 
     fun getInterpreter(): Interpreter? {
         return interpreter
