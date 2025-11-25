@@ -37,9 +37,9 @@ class ScreenshotService : Service() {
     private var isCapturing = false
     private lateinit var modelManager: TFLiteModelManager
     
-    // ✅ NEW: Store UCI mapping to avoid recalculation
-    private var storedUCIMapping: String? = null
-    private var hasStoredMapping = false
+    // ✅ FIXED: Store only orientation, not full mapping
+    private var storedOrientation: Boolean? = null  // true = normal, false = reversed
+    private var hasStoredOrientation = false
 
     private val screenshotRunnable = object : Runnable {
         override fun run() {
@@ -60,54 +60,53 @@ class ScreenshotService : Service() {
         Log.d(TAG, "ScreenshotService created")
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "ScreenshotService starting")
 
-override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    Log.d(TAG, "ScreenshotService starting")
+        // ✅ FIXED: Reset stored orientation when service starts fresh
+        storedOrientation = null
+        hasStoredOrientation = false
 
-    // ✅ NEW: Reset stored mapping when service starts fresh
-    storedUCIMapping = null
-    hasStoredMapping = false
+        val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
+        val data = intent?.getParcelableExtra<Intent>("data")
 
-    val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
-    val data = intent?.getParcelableExtra<Intent>("data")
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            Log.e(TAG, "Invalid result code or data")
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
-    if (resultCode != Activity.RESULT_OK || data == null) {
-        Log.e(TAG, "Invalid result code or data")
-        stopSelf()
-        return START_NOT_STICKY
+        try {
+            val mediaProjectionManager =
+                getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
+
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    super.onStop()
+                    Log.d(TAG, "MediaProjection stopped")
+                    stopSelf()
+                }
+            }, handler)
+
+            setupVirtualDisplay()
+            isCapturing = true
+            
+            // ✅ MODIFIED: Add 15-second delay before starting screenshot capture
+            handler.postDelayed({
+                handler.post(screenshotRunnable)
+                Log.d(TAG, "Screenshot capture started after 15-second delay")
+            }, 15000) // 15 seconds delay
+            
+            Log.d(TAG, "Screenshot service initialized - capture will begin in 15 seconds")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting screenshot service: ${e.message}")
+            e.printStackTrace()
+            stopSelf()
+        }
+
+        return START_STICKY
     }
-
-    try {
-        val mediaProjectionManager =
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-
-        mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                super.onStop()
-                Log.d(TAG, "MediaProjection stopped")
-                stopSelf()
-            }
-        }, handler)
-
-        setupVirtualDisplay()
-        isCapturing = true
-        
-        // ✅ MODIFIED: Add 15-second delay before starting screenshot capture
-        handler.postDelayed({
-            handler.post(screenshotRunnable)
-            Log.d(TAG, "Screenshot capture started after 15-second delay")
-        }, 15000) // 15 seconds delay
-        
-        Log.d(TAG, "Screenshot service initialized - capture will begin in 15 seconds")
-    } catch (e: Exception) {
-        Log.e(TAG, "Error starting screenshot service: ${e.message}")
-        e.printStackTrace()
-        stopSelf()
-    }
-
-    return START_STICKY
-}
 
     private fun setupVirtualDisplay() {
         try {
@@ -202,7 +201,7 @@ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
     }
 
-    // ⭐ MODIFIED FUNCTION — Process 64 PIECES in RAM only (no saving)
+    // ⭐ FIXED FUNCTION — Always classify for current piece positions, store only orientation
     private fun save64Pieces(bmp: Bitmap) {
         val cellW = bmp.width / 8
         val cellH = bmp.height / 8
@@ -221,21 +220,17 @@ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
             }
         }
         
-        // ✅ MODIFIED: Only classify if we don't have stored mapping
-        if (!hasStoredMapping || storedUCIMapping == null) {
-            modelManager.classifyChessBoard(pieces, this) { uciMapping ->
-                // ✅ Store the mapping for future use
-                storedUCIMapping = uciMapping
-                hasStoredMapping = true
-                Log.d(TAG, "UCI mapping stored: $uciMapping")
-                
-                // Show notification with the mapping
-                showNotification("Chess Board Detected", uciMapping)
+        // ✅ FIXED: Always classify to get current piece positions
+        modelManager.classifyChessBoard(pieces, this, storedOrientation) { uciMapping, orientation ->
+            // ✅ Store only the orientation for future use
+            if (!hasStoredOrientation) {
+                storedOrientation = orientation
+                hasStoredOrientation = true
+                Log.d(TAG, "Board orientation stored: $orientation")
             }
-        } else {
-            // ✅ Use stored mapping without reclassification
-            Log.d(TAG, "Using stored UCI mapping: $storedUCIMapping")
-            showNotification("Chess Board", storedUCIMapping ?: "No mapping available")
+            
+            // Show notification with current mapping
+            showNotification("Chess Board Detected", uciMapping)
         }
         
         // Clean up
@@ -304,9 +299,9 @@ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         mediaProjection?.stop()
         modelManager.close()
         
-        // ✅ NEW: Clear stored mapping when service stops
-        storedUCIMapping = null
-        hasStoredMapping = false
+        // ✅ FIXED: Clear stored orientation when service stops
+        storedOrientation = null
+        hasStoredOrientation = false
         
         Log.d(TAG, "ScreenshotService destroyed")
     }
