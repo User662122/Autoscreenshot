@@ -1,16 +1,31 @@
 package com.example.autoscreenshot
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 object NetworkManager {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
     private const val TAG = "NetworkManager"
+    private val handler = Handler(Looper.getMainLooper())
+
+    private fun showToast(context: Context, message: String) {
+        handler.post {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     /**
      * Send starting color to /start endpoint
@@ -23,6 +38,7 @@ object NetworkManager {
                 val url = "$ngrokUrl/start"
 
                 Log.d(TAG, "Sending start color: $color to $url")
+                showToast(context, "🌐 POST /start: $color")
 
                 val requestBody = color.toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -37,8 +53,10 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Start color sent, response: $bodyString")
+                    showToast(context, "✅ /start → $bodyString")
                 } else {
                     Log.e(TAG, "Failed: ${response.code} - ${response.message}")
+                    showToast(context, "❌ /start failed: ${response.code}")
                 }
 
                 response.close()
@@ -46,6 +64,7 @@ object NetworkManager {
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending start color: ${e.message}")
+                showToast(context, "❌ Network error: ${e.message?.take(30)}")
                 e.printStackTrace()
                 Pair(false, "")
             }
@@ -71,6 +90,7 @@ object NetworkManager {
                 val positionData = "white:$whiteStr;black:$blackStr"
 
                 Log.d(TAG, "Sending positions to $url: $positionData")
+                showToast(context, "🌐 POST /move: W:${whitePositions.size} B:${blackPositions.size}")
 
                 val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -85,8 +105,10 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Positions sent, response: $bodyString")
+                    showToast(context, "✅ /move → $bodyString")
                 } else {
                     Log.e(TAG, "Failed: ${response.code} - ${response.message}")
+                    showToast(context, "❌ /move failed: ${response.code}")
                 }
 
                 response.close()
@@ -94,6 +116,7 @@ object NetworkManager {
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending piece positions: ${e.message}")
+                showToast(context, "❌ Network error: ${e.message?.take(30)}")
                 e.printStackTrace()
                 Pair(false, "")
             }
@@ -110,6 +133,7 @@ object NetworkManager {
                 val url = "$ngrokUrl/move"
 
                 Log.d(TAG, "Sending move: $move → $url")
+                showToast(context, "🌐 POST /move: $move")
 
                 val requestBody = move.toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -124,8 +148,10 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Move sent, AI Response: $bodyString")
+                    showToast(context, "✅ AI → $bodyString")
                 } else {
                     Log.e(TAG, "Failed: ${response.code} - ${response.message}")
+                    showToast(context, "❌ Failed: ${response.code}")
                 }
 
                 response.close()
@@ -133,6 +159,7 @@ object NetworkManager {
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending move: ${e.message}")
+                showToast(context, "❌ Network error: ${e.message?.take(30)}")
                 e.printStackTrace()
                 Pair(false, "")
             }
