@@ -19,6 +19,8 @@ import android.util.DisplayMetrics
 import android.view.WindowManager
 import android.widget.Toast
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class ScreenshotService : Service() {
@@ -196,7 +198,10 @@ class ScreenshotService : Service() {
 
         val fullUrl = "$url/move"
 
-        val body = RequestBody.create(MediaType.parse("text/plain"), uci)
+        // <<< UPDATED: use Kotlin extension functions instead of MediaType.parse / RequestBody.create >>>
+        val mediaType = "text/plain".toMediaType()
+        val body = uci.toRequestBody(mediaType)
+
         val req = Request.Builder().url(fullUrl).post(body).build()
 
         OkHttpClient().newCall(req).enqueue(object : Callback {
