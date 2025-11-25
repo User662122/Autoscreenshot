@@ -76,7 +76,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                 delay(3000)
             }
             
-            // Now start polling for moves
+            // Now start polling SharedPreferences for moves
             while (isRunning) {
                 try {
                     // Check if screenshot service is still running
@@ -88,10 +88,15 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                         continue
                     }
                     
-                    val move = fetchMoveFromBackend()
+                    // Read pending move from SharedPreferences (set by ScreenshotService)
+                    val move = fetchMoveFromSharedPreferences()
                     if (move != null && move.isNotEmpty()) {
-                        Log.d(TAG, "Received move: $move")
+                        Log.d(TAG, "Found pending move: $move")
                         executeMove(move)
+                        
+                        // Clear the move after execution to prevent duplicate execution
+                        Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
+                        Log.d(TAG, "Cleared pending move after execution")
                     }
                     // Poll every 2 seconds
                     delay(2000)
@@ -104,38 +109,17 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         }
     }
     
-    private suspend fun fetchMoveFromBackend(): String? = withContext(Dispatchers.IO) {
-        try {
-            val ngrokUrl = MainActivity.getNgrokUrl(this@ChessMoveAccessibilityService)
-            val url = "$ngrokUrl/move"
-            
-            Log.d(TAG, "Polling /move endpoint: $url")
-            
-            val request = Request.Builder()
-                .url(url)
-                .post(RequestBody.create(null, ByteArray(0))) // Empty body
-                .build()
-            
-            val response = client.newCall(request).execute()
-            
-            if (response.isSuccessful) {
-                val move = response.body?.string()?.trim()
-                Log.d(TAG, "Backend response: $move")
-                response.close()
-                return@withContext move
-            } else {
-                Log.d(TAG, "Backend returned: ${response.code}")
-                response.close()
-                return@withContext null
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Network error: ${e.message}")
-            return@withContext null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching move: ${e.message}")
-            e.printStackTrace()
-            return@withContext null
+    private fun fetchMoveFromSharedPreferences(): String? {
+        // Read pending AI move from SharedPreferences (stored by ScreenshotService)
+        val pendingMove = Prefs.getString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
+        
+        if (pendingMove.isNotEmpty()) {
+            Log.d(TAG, "Found pending AI move in SharedPreferences: $pendingMove")
+            return pendingMove
         }
+        
+        Log.d(TAG, "No pending move in SharedPreferences")
+        return null
     }
     
     private suspend fun executeMove(move: String) {
