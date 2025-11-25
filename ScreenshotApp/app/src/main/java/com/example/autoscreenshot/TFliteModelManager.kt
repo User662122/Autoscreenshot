@@ -156,44 +156,59 @@ class TFLiteModelManager(context: Context) {
 
     // ✅ FIXED: Use provided orientation instead of detecting every time
     private fun createUCIResult(classifications: List<String>, orientation: Boolean, context: Context): String {
-        // Choose mapping based on the provided orientation
-        val chessSquares = if (orientation) {
-            chessSquaresNormal
-        } else {
-            chessSquaresReversed
-        }
-        
-        // Build FEN-like representation with CURRENT piece positions
-        val whitePieces = mutableListOf<String>()
-        val blackPieces = mutableListOf<String>()
-        
-        for (i in classifications.indices) {
-            when (classifications[i]) {
-                "White" -> whitePieces.add(chessSquares[i])
-                "Black" -> blackPieces.add(chessSquares[i])
-                // Empty squares are not tracked
-            }
-        }
-        
-        // Create display message with CURRENT positions
-        val message = buildString {
-            append("White: ")
-            append(whitePieces.joinToString(", "))
-            append("\nBlack: ")
-            append(blackPieces.joinToString(", "))
-            append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
-        }
-        
-        // Show Toast with CURRENT UCI mapping
-        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-        
-        // Also log for debugging
-        android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
-        android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
-        android.util.Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
-        
-        return message
+    // Choose mapping based on the provided orientation
+    val chessSquares = if (orientation) {
+        chessSquaresNormal
+    } else {
+        chessSquaresReversed
     }
+    
+    // Build FEN-like representation with CURRENT piece positions
+    val whitePieces = mutableListOf<String>()
+    val blackPieces = mutableListOf<String>()
+    
+    for (i in classifications.indices) {
+        when (classifications[i]) {
+            "White" -> whitePieces.add(chessSquares[i])
+            "Black" -> blackPieces.add(chessSquares[i])
+            // Empty squares are not tracked
+        }
+    }
+    
+    // Create UCI format strings
+    val whiteUCI = whitePieces.joinToString(",")
+    val blackUCI = blackPieces.joinToString(",")
+    val mappingType = if (orientation) "normal" else "reversed"
+    
+    // Save to SharedPreferences using Prefs utility
+    Prefs.setString(context, "uci_white", whiteUCI)
+    Prefs.setString(context, "uci_black", blackUCI)
+    Prefs.setString(context, "uci_mapping", mappingType)
+    
+    // Create combined UCI string
+    val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
+    Prefs.setString(context, "uci", combinedUCI)
+    
+    // Create display message with CURRENT positions
+    val message = buildString {
+        append("White: ")
+        append(whitePieces.joinToString(", "))
+        append("\nBlack: ")
+        append(blackPieces.joinToString(", "))
+        append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
+    }
+    
+    // Show Toast with CURRENT UCI mapping
+    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+    
+    // Also log for debugging
+    android.util.Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
+    android.util.Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
+    android.util.Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
+    android.util.Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
+    
+    return message
+}
 
     fun getInterpreter(): Interpreter? {
         return interpreter
