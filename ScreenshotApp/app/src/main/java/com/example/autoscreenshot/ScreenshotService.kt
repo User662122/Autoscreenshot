@@ -5,37 +5,41 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Color
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.WindowManager
-import android.widget.Toast
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.IOException
+import androidx.core.app.NotificationCompat
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
 
 class ScreenshotService : Service() {
-
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
     private val handler = Handler(Looper.getMainLooper())
     private var isCapturing = false
     private lateinit var modelManager: TFLiteModelManager
-
+    
+    // ✅ NEW: Store UCI mapping to avoid recalculation
     private var storedUCIMapping: String? = null
     private var hasStoredMapping = false
-
-    private var lastSentUCI: String? = null   // NEW
 
     private val screenshotRunnable = object : Runnable {
         override fun run() {
@@ -50,20 +54,24 @@ class ScreenshotService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, createNotification())
         modelManager = TFLiteModelManager(this)
-        Toast.makeText(this, "Screenshot service started", Toast.LENGTH_SHORT).show()
+        Log.d(TAG, "ScreenshotService created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "ScreenshotService starting")
 
+        // ✅ NEW: Reset stored mapping when service starts fresh
         storedUCIMapping = null
         hasStoredMapping = false
-        lastSentUCI = null
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
 
         if (resultCode != Activity.RESULT_OK || data == null) {
+            Log.e(TAG, "Invalid result code or data")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -75,6 +83,8 @@ class ScreenshotService : Service() {
 
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
+                    super.onStop()
+                    Log.d(TAG, "MediaProjection stopped")
                     stopSelf()
                 }
             }, handler)
@@ -82,8 +92,10 @@ class ScreenshotService : Service() {
             setupVirtualDisplay()
             isCapturing = true
             handler.post(screenshotRunnable)
-
+            Log.d(TAG, "Screenshot capture started")
         } catch (e: Exception) {
+            Log.e(TAG, "Error starting screenshot service: ${e.message}")
+            e.printStackTrace()
             stopSelf()
         }
 
@@ -91,46 +103,69 @@ class ScreenshotService : Service() {
     }
 
     private fun setupVirtualDisplay() {
-        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val metrics = DisplayMetrics()
+        try {
+            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val metrics = DisplayMetrics()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            display?.getRealMetrics(metrics)
-        } else {
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.getRealMetrics(metrics)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display?.getRealMetrics(metrics)
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay.getRealMetrics(metrics)
+            }
+
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+            val density = metrics.densityDpi
+
+            Log.d(TAG, "Display metrics: $width x $height, density: $density")
+
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "ScreenCapture",
+                width,
+                height,
+                density,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader?.surface,
+                null,
+                null
+            )
+
+            Log.d(TAG, "Virtual display setup completed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up virtual display: ${e.message}")
+            e.printStackTrace()
         }
-
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
-
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "ScreenCapture",
-            width,
-            height,
-            density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            null
-        )
     }
 
     private fun captureScreenshot() {
         try {
-            val image = imageReader?.acquireLatestImage() ?: return
-            val bitmap = imageToBitmap(image)
-            image.close()
+            val image = imageReader?.acquireLatestImage()
+            if (image != null) {
+                Log.d(TAG, "Image acquired successfully")
+                val bitmap = imageToBitmap(image)
+                image.close()
 
-            if (bitmap != null) {
-                val cropped = Bitmap.createBitmap(bitmap, 11, 505, 709, 1201)
-                processBoard(cropped)
+                if (bitmap != null) {
+                    // FIRST CROP (Original region)
+                    val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
+
+                    // SAVE 64 PIECES, 96×96 EACH
+                    save64Pieces(cropped)
+
+                    Log.d(TAG, "64 screenshot pieces processed successfully")
+                } else {
+                    Log.e(TAG, "Failed to convert image to bitmap")
+                }
+            } else {
+                Log.d(TAG, "No image available")
             }
-
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "Error capturing screenshot: ${e.message}")
+            e.printStackTrace()
+        }
     }
 
     private fun imageToBitmap(image: Image): Bitmap? {
@@ -141,88 +176,137 @@ class ScreenshotService : Service() {
             val rowStride = planes[0].rowStride
             val rowPadding = rowStride - pixelStride * image.width
 
-            val temp = Bitmap.createBitmap(
+            val bitmap = Bitmap.createBitmap(
                 image.width + rowPadding / pixelStride,
                 image.height,
                 Bitmap.Config.ARGB_8888
             )
-            temp.copyPixelsFromBuffer(buffer)
+            bitmap.copyPixelsFromBuffer(buffer)
 
-            Bitmap.createBitmap(temp, 0, 0, image.width, image.height)
-
+            Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
         } catch (e: Exception) {
+            Log.e(TAG, "Error converting image to bitmap: ${e.message}")
+            e.printStackTrace()
             null
         }
     }
 
-    private fun processBoard(bmp: Bitmap) {
+    private fun cropBitmap(src: Bitmap, x1: Int, y1: Int, x2: Int, y2: Int): Bitmap {
+        return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
+    }
+
+    // ⭐ MODIFIED FUNCTION — Process 64 PIECES in RAM only (no saving)
+    private fun save64Pieces(bmp: Bitmap) {
         val cellW = bmp.width / 8
         val cellH = bmp.height / 8
-        val pieces = ArrayList<Bitmap>()
+        val pieces = mutableListOf<Bitmap>()
 
         for (r in 0 until 8) {
             for (c in 0 until 8) {
-                val piece = Bitmap.createBitmap(bmp, c * cellW, r * cellH, cellW, cellH)
+                val x = c * cellW
+                val y = r * cellH
+
+                val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
                 val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+                
                 pieces.add(resized)
                 piece.recycle()
             }
         }
-
+        
+        // ✅ MODIFIED: Only classify if we don't have stored mapping
         if (!hasStoredMapping || storedUCIMapping == null) {
-
             modelManager.classifyChessBoard(pieces, this) { uciMapping ->
+                // ✅ Store the mapping for future use
                 storedUCIMapping = uciMapping
                 hasStoredMapping = true
-                UCIManager.currentUCI = uciMapping
-
-                detectAndSend(uciMapping)     // NEW CALL
+                Log.d(TAG, "UCI mapping stored: $uciMapping")
+                
+                // Show notification with the mapping
+                showNotification("Chess Board Detected", uciMapping)
             }
-
         } else {
-            UCIManager.currentUCI = storedUCIMapping!!
-            detectAndSend(storedUCIMapping!!)   // NEW CALL
+            // ✅ Use stored mapping without reclassification
+            Log.d(TAG, "Using stored UCI mapping: $storedUCIMapping")
+            showNotification("Chess Board", storedUCIMapping ?: "No mapping available")
         }
-
+        
+        // Clean up
         pieces.forEach { it.recycle() }
     }
+    
+    private fun showNotification(title: String, message: String) {
+        try {
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(android.R.drawable.ic_menu_camera)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setAutoCancel(true)
+                .build()
 
-    private fun detectAndSend(uci: String) {
-        if (uci == lastSentUCI) return
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing notification: ${e.message}")
+        }
+    }
 
-        lastSentUCI = uci
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Screenshot Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Taking screenshots every 5 seconds"
+                setShowBadge(false)
+            }
 
-        val pref = getSharedPreferences("global", MODE_PRIVATE)
-        val url = pref.getString("ngrok_url", "") ?: ""
-        if (url.isEmpty()) return
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
 
-        val fullUrl = "$url/move"
+    private fun createNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
-        // <<< UPDATED: use Kotlin extension functions instead of MediaType.parse / RequestBody.create >>>
-        val mediaType = "text/plain".toMediaType()
-        val body = uci.toRequestBody(mediaType)
-
-        val req = Request.Builder().url(fullUrl).post(body).build()
-
-        OkHttpClient().newCall(req).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {}
-            override fun onResponse(call: Call, response: Response) { response.close() }
-        })
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Screenshot Service")
+            .setContentText("Taking screenshots every 5 seconds")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.d(TAG, "ScreenshotService destroying")
         isCapturing = false
         handler.removeCallbacks(screenshotRunnable)
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()
         modelManager.close()
-
+        
+        // ✅ NEW: Clear stored mapping when service stops
         storedUCIMapping = null
         hasStoredMapping = false
-        lastSentUCI = null
+        
+        Log.d(TAG, "ScreenshotService destroyed")
+    }
 
-        Toast.makeText(this, "Screenshot service stopped", Toast.LENGTH_SHORT).show()
+    companion object {
+        private const val TAG = "ScreenshotService"
+        private const val NOTIFICATION_ID = 1
+        private const val CHANNEL_ID = "screenshot_service_channel"
     }
 }
