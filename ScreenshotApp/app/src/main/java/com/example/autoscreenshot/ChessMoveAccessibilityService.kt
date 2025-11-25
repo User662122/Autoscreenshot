@@ -2,7 +2,9 @@ package com.example.autoscreenshot
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Intent
 import android.graphics.Path
+import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.*
@@ -10,6 +12,23 @@ import okhttp3.*
 import java.io.IOException
 
 class ChessMoveAccessibilityService : AccessibilityService() {
+    
+    companion object {
+        fun isAccessibilityServiceEnabled(context: android.content.Context): Boolean {
+            val service = "${context.packageName}/${ChessMoveAccessibilityService::class.java.name}"
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+            return enabledServices?.contains(service) == true
+        }
+        
+        fun openAccessibilitySettings(context: android.content.Context) {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            context.startActivity(intent)
+        }
+    }
     
     private val client = OkHttpClient()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
