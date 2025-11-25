@@ -52,55 +52,50 @@ object NetworkManager {
         }
     }
     
-    /**
-     * Send piece positions to /move endpoint
-     * Format: "white:a1,a2,a3 black:h7,h8"
-     * @param context Application context
-     * @param whitePositions List of white piece positions
-     * @param blackPositions List of black piece positions
-     */
-    suspend fun sendPiecePositions(
-        context: Context,
-        whitePositions: List<String>,
-        blackPositions: List<String>
-    ): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val ngrokUrl = MainActivity.getNgrokUrl(context)
-                val url = "$ngrokUrl/move"
-                
-                // Format: "white:a1,a2,a3 black:h7,h8"
-                val whiteStr = whitePositions.joinToString(",")
-                val blackStr = blackPositions.joinToString(",")
-                val positionData = "white:$whiteStr black:$blackStr"
-                
-                Log.d(TAG, "Sending piece positions to $url: $positionData")
-                
-                val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
-                
-                val request = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .build()
-                
-                val response = client.newCall(request).execute()
-                val success = response.isSuccessful
-                
-                if (success) {
-                    Log.d(TAG, "Piece positions sent successfully: ${response.body?.string()}")
-                } else {
-                    Log.e(TAG, "Failed to send positions: ${response.code} - ${response.message}")
-                }
-                
-                response.close()
-                success
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending piece positions: ${e.message}")
-                e.printStackTrace()
-                false
+   
+    
+suspend fun sendPiecePositions(
+    context: Context,
+    whitePositions: List<String>,
+    blackPositions: List<String>
+): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            val ngrokUrl = MainActivity.getNgrokUrl(context)
+            val url = "$ngrokUrl/move"
+            
+            // CHANGED: Format: "white:a1,a2;black:a7,a8"
+            val whiteStr = whitePositions.joinToString(",")
+            val blackStr = blackPositions.joinToString(",")
+            val positionData = "white:$whiteStr;black:$blackStr" // Single semicolon separator
+            
+            Log.d(TAG, "Sending piece positions to $url: $positionData")
+            
+            val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
+            
+            val request = Request.Builder()
+                .url(url)
+                .post(requestBody)
+                .build()
+            
+            val response = client.newCall(request).execute()
+            val success = response.isSuccessful
+            
+            if (success) {
+                Log.d(TAG, "Piece positions sent successfully: ${response.body?.string()}")
+            } else {
+                Log.e(TAG, "Failed to send positions: ${response.code} - ${response.message}")
             }
+            
+            response.close()
+            success
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending piece positions: ${e.message}")
+            e.printStackTrace()
+            false
         }
     }
+}
     
     /**
      * Send UCI move format to /move endpoint
