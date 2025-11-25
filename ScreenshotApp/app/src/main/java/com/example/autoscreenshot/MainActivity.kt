@@ -75,6 +75,9 @@ class MainActivity : AppCompatActivity() {
         // App खुलते ही saved Ngrok URL को load करें
         loadSavedNgrokUrl()
         
+        // Check accessibility service status
+        updateAccessibilityStatus()
+        
         binding.startButton.setOnClickListener {
             checkPermissionsAndStart()
         }
@@ -96,6 +99,26 @@ class MainActivity : AppCompatActivity() {
         binding.clearUrlButton.setOnClickListener {
             clearNgrokUrl()
         }
+        
+        // Enable Accessibility Service button
+        binding.enableAccessibilityButton.setOnClickListener {
+            ChessMoveAccessibilityService.openAccessibilitySettings(this)
+        }
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        updateAccessibilityStatus()
+    }
+    
+    private fun updateAccessibilityStatus() {
+        val isEnabled = ChessMoveAccessibilityService.isAccessibilityServiceEnabled(this)
+        binding.accessibilityStatusText.text = if (isEnabled) {
+            "Accessibility Service: Enabled ✓"
+        } else {
+            "Accessibility Service: Disabled"
+        }
+        binding.enableAccessibilityButton.isEnabled = !isEnabled
     }
     
     private fun loadSavedNgrokUrl() {
