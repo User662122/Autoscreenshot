@@ -9,6 +9,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.*
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class ChessMoveAccessibilityService : AccessibilityService() {
@@ -46,6 +48,10 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private val CELL_WIDTH = BOARD_WIDTH / 8
     private val CELL_HEIGHT = BOARD_HEIGHT / 8
     
+    // Track last sent positions to avoid resending
+    private var lastSentWhite = ""
+    private var lastSentBlack = ""
+    
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.d(TAG, "Chess Move Accessibility Service Connected")
@@ -79,11 +85,36 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             // Now start polling for moves
             while (isRunning) {
                 try {
-                    val move = fetchMoveFromBackend()
-                    if (move != null && move.isNotEmpty()) {
-                        Log.d(TAG, "Received move: $move")
-                        executeMove(move)
+                    // Check if screenshot service is still running
+                    val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
+                    
+                    if (isServiceActive != "true") {
+                        Log.d(TAG, "Screenshot service stopped. Pausing move polling...")
+                        delay(3000)
+                        continue
                     }
+                    
+                    // Get current piece positions
+                    val whiteUCI = Prefs.getString(this@ChessMoveAccessibilityService, "uci_white", "")
+                    val blackUCI = Prefs.getString(this@ChessMoveAccessibilityService, "uci_black", "")
+                    
+                    // Only send if positions have changed
+                    if (whiteUCI != lastSentWhite || blackUCI != lastSentBlack) {
+                        if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
+                            Log.d(TAG, "Position changed. Sending to backend...")
+                            val move = sendPositionsAndGetMove(whiteUCI, blackUCI)
+                            
+                            if (move != null && move.isNotEmpty()) {
+                                Log.d(TAG, "Received AI move: $move")
+                                executeMove(move)
+                            }
+                            
+                            // Update last sent positions
+                            lastSentWhite = whiteUCI
+                            lastSentBlack = blackUCI
+                        }
+                    }
+                    
                     // Poll every 2 seconds
                     delay(2000)
                 } catch (e: Exception) {
@@ -95,27 +126,32 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         }
     }
     
-    private suspend fun fetchMoveFromBackend(): String? = withContext(Dispatchers.IO) {
+    private suspend fun sendPositionsAndGetMove(whiteUCI: String, blackUCI: String): String? = withContext(Dispatchers.IO) {
         try {
             val ngrokUrl = MainActivity.getNgrokUrl(this@ChessMoveAccessibilityService)
             val url = "$ngrokUrl/move"
             
-            Log.d(TAG, "Polling /move endpoint: $url")
+            // Format: "white:a1,a2;black:a7,a8"
+            val positionData = "white:$whiteUCI;black:$blackUCI"
+            
+            Log.d(TAG, "Sending positions to $url: $positionData")
+            
+            val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
             
             val request = Request.Builder()
                 .url(url)
-                .post(RequestBody.create(null, ByteArray(0))) // Empty body
+                .post(requestBody)
                 .build()
             
             val response = client.newCall(request).execute()
             
             if (response.isSuccessful) {
                 val move = response.body?.string()?.trim()
-                Log.d(TAG, "Backend response: $move")
+                Log.d(TAG, "Backend response: '$move'")
                 response.close()
-                return@withContext move
+                return@withContext if (move.isNullOrEmpty()) null else move
             } else {
-                Log.d(TAG, "Backend returned: ${response.code}")
+                Log.e(TAG, "Backend returned error: ${response.code}")
                 response.close()
                 return@withContext null
             }
@@ -123,7 +159,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Network error: ${e.message}")
             return@withContext null
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching move: ${e.message}")
+            Log.e(TAG, "Error sending positions: ${e.message}")
             e.printStackTrace()
             return@withContext null
         }
@@ -149,12 +185,12 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             if (fromCoords != null && toCoords != null) {
                 // First tap - pick up piece
                 performTap(fromCoords.first, fromCoords.second)
-                delay(300) // Wait between taps
+                delay(500) // Increased delay between taps
                 
                 // Second tap - place piece
                 performTap(toCoords.first, toCoords.second)
                 
-                Log.d(TAG, "Move executed successfully")
+                Log.d(TAG, "Move executed successfully: $move")
             } else {
                 Log.e(TAG, "Failed to convert squares to coordinates")
             }
@@ -191,7 +227,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         val x = BOARD_LEFT + (col * CELL_WIDTH) + (CELL_WIDTH / 2)
         val y = BOARD_TOP + (row * CELL_HEIGHT) + (CELL_HEIGHT / 2)
         
-        Log.d(TAG, "Square $square -> Screen coordinates ($x, $y)")
+        Log.d(TAG, "Square $square -> Screen coordinates ($x, $y) [bottomColor=$bottomColor]")
         
         return Pair(x.toFloat(), y.toFloat())
     }
@@ -238,6 +274,8 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         super.onDestroy()
         isRunning = false
         serviceScope.cancel()
+        lastSentWhite = ""
+        lastSentBlack = ""
         Log.d(TAG, "Chess Move Accessibility Service Destroyed")
     }
 }
