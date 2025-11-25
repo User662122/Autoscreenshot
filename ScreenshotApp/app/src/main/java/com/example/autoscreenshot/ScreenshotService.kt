@@ -257,6 +257,12 @@ class ScreenshotService : Service() {
                     if (startSuccess) {
                         hasStartColorSent = true
                         Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
+                        
+                        // Store AI move in SharedPreferences for AccessibilityService
+                        if (startResponse.isNotEmpty() && startResponse != "Invalid" && startResponse != "Game Over") {
+                            Prefs.setString(this@ScreenshotService, "pending_ai_move", startResponse)
+                            Log.d(TAG, "Stored pending AI move: $startResponse")
+                        }
                     } else {
                         Log.e(TAG, "Failed to send start color. Response: $startResponse")
                     }
@@ -280,6 +286,13 @@ class ScreenshotService : Service() {
 
                     if (positionSuccess) {
                         Log.d(TAG, "Piece positions sent successfully. Response: $positionResponse")
+                        
+                        // Store AI move in SharedPreferences for AccessibilityService
+                        if (positionResponse.isNotEmpty() && positionResponse != "Invalid" && positionResponse != "Game Over") {
+                            Prefs.setString(this@ScreenshotService, "pending_ai_move", positionResponse)
+                            Log.d(TAG, "Stored pending AI move: $positionResponse")
+                        }
+                        
                         showNotification("Data Sent", "Board state sent to backend")
                     } else {
                         Log.e(TAG, "Failed to send piece positions. Response: $positionResponse")
