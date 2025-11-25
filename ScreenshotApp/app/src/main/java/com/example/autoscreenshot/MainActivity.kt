@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -22,12 +23,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mediaProjectionManager: MediaProjectionManager
     private lateinit var sharedPreferences: SharedPreferences
     
-    // Ngrok URL को store करने के लिए key
-    private companion object {
-        const val PREFS_NAME = "AutoScreenshotPrefs"
-        const val NGROK_URL_KEY = "ngrok_url"
-        const val DEFAULT_NGROK_URL = "https://your-ngrok-url.ngrok.io"
-    }
+    // Constants for SharedPreferences
+    private val PREFS_NAME = "AutoScreenshotPrefs"
+    private val NGROK_URL_KEY = "ngrok_url"
+    private val DEFAULT_NGROK_URL = "https://your-ngrok-url.ngrok.io"
     
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -151,8 +150,8 @@ class MainActivity : AppCompatActivity() {
     // Static function जिसे कहीं भी access कर सकते हैं
     companion object {
         fun getNgrokUrl(context: Context): String {
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getString(NGROK_URL_KEY, DEFAULT_NGROK_URL) ?: DEFAULT_NGROK_URL
+            val prefs = context.getSharedPreferences("AutoScreenshotPrefs", Context.MODE_PRIVATE)
+            return prefs.getString("ngrok_url", "https://your-ngrok-url.ngrok.io") ?: "https://your-ngrok-url.ngrok.io"
         }
     }
     
