@@ -18,6 +18,8 @@ import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import android.widget.Toast
+import okhttp3.*
+import java.io.IOException
 
 class ScreenshotService : Service() {
 
@@ -30,6 +32,8 @@ class ScreenshotService : Service() {
 
     private var storedUCIMapping: String? = null
     private var hasStoredMapping = false
+
+    private var lastSentUCI: String? = null   // NEW
 
     private val screenshotRunnable = object : Runnable {
         override fun run() {
@@ -52,6 +56,7 @@ class ScreenshotService : Service() {
 
         storedUCIMapping = null
         hasStoredMapping = false
+        lastSentUCI = null
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -120,7 +125,7 @@ class ScreenshotService : Service() {
 
             if (bitmap != null) {
                 val cropped = Bitmap.createBitmap(bitmap, 11, 505, 709, 1201)
-                save64Pieces(cropped)
+                processBoard(cropped)
             }
 
         } catch (_: Exception) {}
@@ -148,7 +153,7 @@ class ScreenshotService : Service() {
         }
     }
 
-    private fun save64Pieces(bmp: Bitmap) {
+    private fun processBoard(bmp: Bitmap) {
         val cellW = bmp.width / 8
         val cellH = bmp.height / 8
         val pieces = ArrayList<Bitmap>()
@@ -168,13 +173,36 @@ class ScreenshotService : Service() {
                 storedUCIMapping = uciMapping
                 hasStoredMapping = true
                 UCIManager.currentUCI = uciMapping
+
+                detectAndSend(uciMapping)     // NEW CALL
             }
 
         } else {
-            UCIManager.currentUCI = storedUCIMapping
+            UCIManager.currentUCI = storedUCIMapping!!
+            detectAndSend(storedUCIMapping!!)   // NEW CALL
         }
 
         pieces.forEach { it.recycle() }
+    }
+
+    private fun detectAndSend(uci: String) {
+        if (uci == lastSentUCI) return
+
+        lastSentUCI = uci
+
+        val pref = getSharedPreferences("global", MODE_PRIVATE)
+        val url = pref.getString("ngrok_url", "") ?: ""
+        if (url.isEmpty()) return
+
+        val fullUrl = "$url/move"
+
+        val body = RequestBody.create(MediaType.parse("text/plain"), uci)
+        val req = Request.Builder().url(fullUrl).post(body).build()
+
+        OkHttpClient().newCall(req).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
+        })
     }
 
     override fun onDestroy() {
@@ -185,8 +213,10 @@ class ScreenshotService : Service() {
         imageReader?.close()
         mediaProjection?.stop()
         modelManager.close()
+
         storedUCIMapping = null
         hasStoredMapping = false
+        lastSentUCI = null
 
         Toast.makeText(this, "Screenshot service stopped", Toast.LENGTH_SHORT).show()
     }
