@@ -9,8 +9,6 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.*
 import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class ChessMoveAccessibilityService : AccessibilityService() {
@@ -47,10 +45,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private val BOARD_HEIGHT = BOARD_BOTTOM - BOARD_TOP
     private val CELL_WIDTH = BOARD_WIDTH / 8
     private val CELL_HEIGHT = BOARD_HEIGHT / 8
-    
-    // Track last sent positions to avoid resending
-    private var lastSentWhite = ""
-    private var lastSentBlack = ""
     
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -94,27 +88,11 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                         continue
                     }
                     
-                    // Get current piece positions
-                    val whiteUCI = Prefs.getString(this@ChessMoveAccessibilityService, "uci_white", "")
-                    val blackUCI = Prefs.getString(this@ChessMoveAccessibilityService, "uci_black", "")
-                    
-                    // Only send if positions have changed
-                    if (whiteUCI != lastSentWhite || blackUCI != lastSentBlack) {
-                        if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
-                            Log.d(TAG, "Position changed. Sending to backend...")
-                            val move = sendPositionsAndGetMove(whiteUCI, blackUCI)
-                            
-                            if (move != null && move.isNotEmpty()) {
-                                Log.d(TAG, "Received AI move: $move")
-                                executeMove(move)
-                            }
-                            
-                            // Update last sent positions
-                            lastSentWhite = whiteUCI
-                            lastSentBlack = blackUCI
-                        }
+                    val move = fetchMoveFromBackend()
+                    if (move != null && move.isNotEmpty()) {
+                        Log.d(TAG, "Received move: $move")
+                        executeMove(move)
                     }
-                    
                     // Poll every 2 seconds
                     delay(2000)
                 } catch (e: Exception) {
@@ -126,32 +104,27 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         }
     }
     
-    private suspend fun sendPositionsAndGetMove(whiteUCI: String, blackUCI: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun fetchMoveFromBackend(): String? = withContext(Dispatchers.IO) {
         try {
             val ngrokUrl = MainActivity.getNgrokUrl(this@ChessMoveAccessibilityService)
             val url = "$ngrokUrl/move"
             
-            // Format: "white:a1,a2;black:a7,a8"
-            val positionData = "white:$whiteUCI;black:$blackUCI"
-            
-            Log.d(TAG, "Sending positions to $url: $positionData")
-            
-            val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
+            Log.d(TAG, "Polling /move endpoint: $url")
             
             val request = Request.Builder()
                 .url(url)
-                .post(requestBody)
+                .post(RequestBody.create(null, ByteArray(0))) // Empty body
                 .build()
             
             val response = client.newCall(request).execute()
             
             if (response.isSuccessful) {
                 val move = response.body?.string()?.trim()
-                Log.d(TAG, "Backend response: '$move'")
+                Log.d(TAG, "Backend response: $move")
                 response.close()
-                return@withContext if (move.isNullOrEmpty()) null else move
+                return@withContext move
             } else {
-                Log.e(TAG, "Backend returned error: ${response.code}")
+                Log.d(TAG, "Backend returned: ${response.code}")
                 response.close()
                 return@withContext null
             }
@@ -159,7 +132,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             Log.e(TAG, "Network error: ${e.message}")
             return@withContext null
         } catch (e: Exception) {
-            Log.e(TAG, "Error sending positions: ${e.message}")
+            Log.e(TAG, "Error fetching move: ${e.message}")
             e.printStackTrace()
             return@withContext null
         }
@@ -185,12 +158,12 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             if (fromCoords != null && toCoords != null) {
                 // First tap - pick up piece
                 performTap(fromCoords.first, fromCoords.second)
-                delay(500) // Increased delay between taps
+                delay(300) // Wait between taps
                 
                 // Second tap - place piece
                 performTap(toCoords.first, toCoords.second)
                 
-                Log.d(TAG, "Move executed successfully: $move")
+                Log.d(TAG, "Move executed successfully")
             } else {
                 Log.e(TAG, "Failed to convert squares to coordinates")
             }
@@ -227,7 +200,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         val x = BOARD_LEFT + (col * CELL_WIDTH) + (CELL_WIDTH / 2)
         val y = BOARD_TOP + (row * CELL_HEIGHT) + (CELL_HEIGHT / 2)
         
-        Log.d(TAG, "Square $square -> Screen coordinates ($x, $y) [bottomColor=$bottomColor]")
+        Log.d(TAG, "Square $square -> Screen coordinates ($x, $y)")
         
         return Pair(x.toFloat(), y.toFloat())
     }
@@ -274,8 +247,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         super.onDestroy()
         isRunning = false
         serviceScope.cancel()
-        lastSentWhite = ""
-        lastSentBlack = ""
         Log.d(TAG, "Chess Move Accessibility Service Destroyed")
     }
 }
