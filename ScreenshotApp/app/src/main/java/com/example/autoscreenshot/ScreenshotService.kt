@@ -32,10 +32,10 @@ class ScreenshotService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var isCapturing = false
     private lateinit var modelManager: TFLiteModelManager
-    
+
     // Coroutine scope for network calls
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    
+
     // Store orientation and track if start color was sent
     private var storedOrientation: Boolean? = null
     private var hasStoredOrientation = false
@@ -67,7 +67,7 @@ class ScreenshotService : Service() {
         storedOrientation = null
         hasStoredOrientation = false
         hasStartColorSent = false
-        
+
         // Mark service as active
         Prefs.setString(this, "screenshot_service_active", "true")
 
@@ -95,13 +95,13 @@ class ScreenshotService : Service() {
 
             setupVirtualDisplay()
             isCapturing = true
-            
+
             // Add 15-second delay before starting screenshot capture
             handler.postDelayed({
                 handler.post(screenshotRunnable)
                 Log.d(TAG, "Screenshot capture started after 15-second delay")
             }, 15000)
-            
+
             Log.d(TAG, "Screenshot service initialized - capture will begin in 15 seconds")
         } catch (e: Exception) {
             Log.e(TAG, "Error starting screenshot service: ${e.message}")
@@ -217,12 +217,12 @@ class ScreenshotService : Service() {
 
                 val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
                 val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-                
+
                 pieces.add(resized)
                 piece.recycle()
             }
         }
-        
+
         // Classify chess board and send to backend
         modelManager.classifyChessBoard(pieces, this, storedOrientation) { uciMapping, orientation ->
             // Store orientation for future use
@@ -231,71 +231,71 @@ class ScreenshotService : Service() {
                 hasStoredOrientation = true
                 Log.d(TAG, "Board orientation stored: $orientation")
             }
-            
+
             // Send data to backend
             sendDataToBackend()
-            
+
             // Show notification
             showNotification("Chess Board Detected", uciMapping)
         }
-        
+
         // Clean up
         pieces.forEach { it.recycle() }
     }
-    
+
     private fun sendDataToBackend() {
         serviceScope.launch {
             try {
                 // Get bottom color from SharedPreferences
                 val bottomColor = Prefs.getString(this@ScreenshotService, "bottom_color", "")
-                
+
                 // Send start color only once
                 if (!hasStartColorSent && bottomColor.isNotEmpty()) {
                     val colorLower = bottomColor.lowercase()
-                    val startSuccess = NetworkManager.sendStartColor(this@ScreenshotService, colorLower)
-                    
+                    val (startSuccess, startResponse) = NetworkManager.sendStartColor(this@ScreenshotService, colorLower)
+
                     if (startSuccess) {
                         hasStartColorSent = true
-                        Log.d(TAG, "Start color sent: $colorLower")
+                        Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
                     } else {
-                        Log.e(TAG, "Failed to send start color")
+                        Log.e(TAG, "Failed to send start color. Response: $startResponse")
                     }
                 }
-                
+
                 // Get piece positions from SharedPreferences
                 val whiteUCI = Prefs.getString(this@ScreenshotService, "uci_white", "")
                 val blackUCI = Prefs.getString(this@ScreenshotService, "uci_black", "")
-                
+
                 if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
                     // Convert comma-separated strings to lists
                     val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                     val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    
+
                     // Send piece positions
-                    val positionSuccess = NetworkManager.sendPiecePositions(
+                    val (positionSuccess, positionResponse) = NetworkManager.sendPiecePositions(
                         this@ScreenshotService,
                         whitePositions,
                         blackPositions
                     )
-                    
+
                     if (positionSuccess) {
-                        Log.d(TAG, "Piece positions sent successfully")
+                        Log.d(TAG, "Piece positions sent successfully. Response: $positionResponse")
                         showNotification("Data Sent", "Board state sent to backend")
                     } else {
-                        Log.e(TAG, "Failed to send piece positions")
+                        Log.e(TAG, "Failed to send piece positions. Response: $positionResponse")
                         showNotification("Error", "Failed to send board state")
                     }
                 } else {
                     Log.w(TAG, "No piece positions available to send")
                 }
-                
+
             } catch (e: Exception) {
                 Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
                 e.printStackTrace()
             }
         }
     }
-    
+
     private fun showNotification(title: String, message: String) {
         try {
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -357,18 +357,18 @@ class ScreenshotService : Service() {
         imageReader?.close()
         mediaProjection?.stop()
         modelManager.close()
-        
+
         // Cancel coroutine scope
         serviceScope.cancel()
-        
+
         // Clear stored states
         storedOrientation = null
         hasStoredOrientation = false
         hasStartColorSent = false
-        
+
         // Mark service as inactive
         Prefs.setString(this, "screenshot_service_active", "false")
-        
+
         Log.d(TAG, "ScreenshotService destroyed")
     }
 
