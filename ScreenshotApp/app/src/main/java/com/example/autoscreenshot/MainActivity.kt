@@ -3,6 +3,7 @@ package com.example.autoscreenshot
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -19,6 +20,14 @@ import com.example.autoscreenshot.databinding.ActivityMainBinding
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var mediaProjectionManager: MediaProjectionManager
+    private lateinit var sharedPreferences: SharedPreferences
+    
+    // Ngrok URL को store करने के लिए key
+    private companion object {
+        const val PREFS_NAME = "AutoScreenshotPrefs"
+        const val NGROK_URL_KEY = "ngrok_url"
+        const val DEFAULT_NGROK_URL = "https://your-ngrok-url.ngrok.io"
+    }
     
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -59,7 +68,13 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         
+        // SharedPreferences initialize करें
+        sharedPreferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        
+        // App खुलते ही saved Ngrok URL को load करें
+        loadSavedNgrokUrl()
         
         binding.startButton.setOnClickListener {
             checkPermissionsAndStart()
@@ -71,6 +86,73 @@ class MainActivity : AppCompatActivity() {
             binding.startButton.isEnabled = true
             binding.stopButton.isEnabled = false
             Toast.makeText(this, "Screenshot service stopped", Toast.LENGTH_SHORT).show()
+        }
+        
+        // Set Ngrok URL button
+        binding.setUrlButton.setOnClickListener {
+            setNgrokUrl()
+        }
+        
+        // Clear Ngrok URL button (optional)
+        binding.clearUrlButton.setOnClickListener {
+            clearNgrokUrl()
+        }
+    }
+    
+    private fun loadSavedNgrokUrl() {
+        val savedUrl = sharedPreferences.getString(NGROK_URL_KEY, DEFAULT_NGROK_URL)
+        binding.urlEditText.setText(savedUrl)
+        binding.currentUrlText.text = "Current URL: $savedUrl"
+    }
+    
+    private fun setNgrokUrl() {
+        val newUrl = binding.urlEditText.text.toString().trim()
+        
+        if (newUrl.isEmpty()) {
+            Toast.makeText(this, "Please enter a valid Ngrok URL", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        // URL validate करें (basic validation)
+        if (!newUrl.startsWith("http://") && !newUrl.startsWith("https://")) {
+            Toast.makeText(this, "Please enter a valid URL starting with http:// or https://", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        // SharedPreferences में save करें
+        with(sharedPreferences.edit()) {
+            putString(NGROK_URL_KEY, newUrl)
+            apply()
+        }
+        
+        binding.currentUrlText.text = "Current URL: $newUrl"
+        Toast.makeText(this, "Ngrok URL updated successfully", Toast.LENGTH_SHORT).show()
+        
+        // Log for debugging
+        Log.d("NgrokURL", "New URL set: $newUrl")
+    }
+    
+    private fun clearNgrokUrl() {
+        with(sharedPreferences.edit()) {
+            remove(NGROK_URL_KEY)
+            apply()
+        }
+        
+        binding.urlEditText.setText("")
+        binding.currentUrlText.text = "Current URL: Not Set"
+        Toast.makeText(this, "Ngrok URL cleared", Toast.LENGTH_SHORT).show()
+    }
+    
+    // अन्य classes में Ngrok URL access करने के लिए function
+    fun getNgrokUrl(): String {
+        return sharedPreferences.getString(NGROK_URL_KEY, DEFAULT_NGROK_URL) ?: DEFAULT_NGROK_URL
+    }
+    
+    // Static function जिसे कहीं भी access कर सकते हैं
+    companion object {
+        fun getNgrokUrl(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(NGROK_URL_KEY, DEFAULT_NGROK_URL) ?: DEFAULT_NGROK_URL
         }
     }
     
