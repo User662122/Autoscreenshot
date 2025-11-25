@@ -67,6 +67,9 @@ class ScreenshotService : Service() {
         storedOrientation = null
         hasStoredOrientation = false
         hasStartColorSent = false
+        
+        // Mark service as active
+        Prefs.setString(this, "screenshot_service_active", "true")
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -362,6 +365,9 @@ class ScreenshotService : Service() {
         storedOrientation = null
         hasStoredOrientation = false
         hasStartColorSent = false
+        
+        // Mark service as inactive
+        Prefs.setString(this, "screenshot_service_active", "false")
         
         Log.d(TAG, "ScreenshotService destroyed")
     }
