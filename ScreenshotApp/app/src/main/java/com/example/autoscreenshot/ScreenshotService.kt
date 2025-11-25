@@ -5,18 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Color
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -24,10 +19,11 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import java.io.File
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 class ScreenshotService : Service() {
     private var mediaProjection: MediaProjection? = null
@@ -37,9 +33,13 @@ class ScreenshotService : Service() {
     private var isCapturing = false
     private lateinit var modelManager: TFLiteModelManager
     
-    // ✅ FIXED: Store only orientation, not full mapping
-    private var storedOrientation: Boolean? = null  // true = normal, false = reversed
+    // Coroutine scope for network calls
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    
+    // Store orientation and track if start color was sent
+    private var storedOrientation: Boolean? = null
     private var hasStoredOrientation = false
+    private var hasStartColorSent = false
 
     private val screenshotRunnable = object : Runnable {
         override fun run() {
@@ -63,9 +63,10 @@ class ScreenshotService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
 
-        // ✅ FIXED: Reset stored orientation when service starts fresh
+        // Reset states when service starts fresh
         storedOrientation = null
         hasStoredOrientation = false
+        hasStartColorSent = false
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -92,11 +93,11 @@ class ScreenshotService : Service() {
             setupVirtualDisplay()
             isCapturing = true
             
-            // ✅ MODIFIED: Add 15-second delay before starting screenshot capture
+            // Add 15-second delay before starting screenshot capture
             handler.postDelayed({
                 handler.post(screenshotRunnable)
                 Log.d(TAG, "Screenshot capture started after 15-second delay")
-            }, 15000) // 15 seconds delay
+            }, 15000)
             
             Log.d(TAG, "Screenshot service initialized - capture will begin in 15 seconds")
         } catch (e: Exception) {
@@ -155,10 +156,10 @@ class ScreenshotService : Service() {
                 image.close()
 
                 if (bitmap != null) {
-                    // FIRST CROP (Original region)
+                    // Crop the chess board region
                     val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
 
-                    // SAVE 64 PIECES, 96×96 EACH
+                    // Process 64 pieces
                     save64Pieces(cropped)
 
                     Log.d(TAG, "64 screenshot pieces processed successfully")
@@ -201,7 +202,6 @@ class ScreenshotService : Service() {
         return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
     }
 
-    // ⭐ FIXED FUNCTION — Always classify for current piece positions, store only orientation
     private fun save64Pieces(bmp: Bitmap) {
         val cellW = bmp.width / 8
         val cellH = bmp.height / 8
@@ -220,21 +220,77 @@ class ScreenshotService : Service() {
             }
         }
         
-        // ✅ FIXED: Always classify to get current piece positions
+        // Classify chess board and send to backend
         modelManager.classifyChessBoard(pieces, this, storedOrientation) { uciMapping, orientation ->
-            // ✅ Store only the orientation for future use
+            // Store orientation for future use
             if (!hasStoredOrientation) {
                 storedOrientation = orientation
                 hasStoredOrientation = true
                 Log.d(TAG, "Board orientation stored: $orientation")
             }
             
-            // Show notification with current mapping
+            // Send data to backend
+            sendDataToBackend()
+            
+            // Show notification
             showNotification("Chess Board Detected", uciMapping)
         }
         
         // Clean up
         pieces.forEach { it.recycle() }
+    }
+    
+    private fun sendDataToBackend() {
+        serviceScope.launch {
+            try {
+                // Get bottom color from SharedPreferences
+                val bottomColor = Prefs.getString(this@ScreenshotService, "bottom_color", "")
+                
+                // Send start color only once
+                if (!hasStartColorSent && bottomColor.isNotEmpty()) {
+                    val colorLower = bottomColor.lowercase()
+                    val startSuccess = NetworkManager.sendStartColor(this@ScreenshotService, colorLower)
+                    
+                    if (startSuccess) {
+                        hasStartColorSent = true
+                        Log.d(TAG, "Start color sent: $colorLower")
+                    } else {
+                        Log.e(TAG, "Failed to send start color")
+                    }
+                }
+                
+                // Get piece positions from SharedPreferences
+                val whiteUCI = Prefs.getString(this@ScreenshotService, "uci_white", "")
+                val blackUCI = Prefs.getString(this@ScreenshotService, "uci_black", "")
+                
+                if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
+                    // Convert comma-separated strings to lists
+                    val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    
+                    // Send piece positions
+                    val positionSuccess = NetworkManager.sendPiecePositions(
+                        this@ScreenshotService,
+                        whitePositions,
+                        blackPositions
+                    )
+                    
+                    if (positionSuccess) {
+                        Log.d(TAG, "Piece positions sent successfully")
+                        showNotification("Data Sent", "Board state sent to backend")
+                    } else {
+                        Log.e(TAG, "Failed to send piece positions")
+                        showNotification("Error", "Failed to send board state")
+                    }
+                } else {
+                    Log.w(TAG, "No piece positions available to send")
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
+                e.printStackTrace()
+            }
+        }
     }
     
     private fun showNotification(title: String, message: String) {
@@ -299,9 +355,13 @@ class ScreenshotService : Service() {
         mediaProjection?.stop()
         modelManager.close()
         
-        // ✅ FIXED: Clear stored orientation when service stops
+        // Cancel coroutine scope
+        serviceScope.cancel()
+        
+        // Clear stored states
         storedOrientation = null
         hasStoredOrientation = false
+        hasStartColorSent = false
         
         Log.d(TAG, "ScreenshotService destroyed")
     }
