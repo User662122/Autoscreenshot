@@ -47,7 +47,7 @@ class ScreenshotService : Service() {
         override fun run() {
             if (isCapturing) {
                 captureScreenshot()
-                handler.postDelayed(this, 5000)
+                handler.postDelayed(this, 3000)
             }
         }
     }
