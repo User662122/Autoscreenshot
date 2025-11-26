@@ -256,7 +256,7 @@ fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation
     }
     
     // Show Toast with CURRENT UCI mapping
-    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+   // Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     
     // Also log for debugging
     Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
