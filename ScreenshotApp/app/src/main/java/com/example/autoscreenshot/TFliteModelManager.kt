@@ -74,7 +74,7 @@ class TFLiteModelManager(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-    // ✅ MODIFIED: Optimized parallel classification using 8 interpreters
+// ✅ MODIFIED: Optimized parallel classification using 8 interpreters
 fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
     if (interpreters[0] == null) {
         Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
@@ -89,15 +89,16 @@ fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation
     try {
         val classifications = Array(64) { "" }
         val futures = mutableListOf<java.util.concurrent.Future<*>>()
-        
+
         // Process 8 pieces in parallel (each interpreter processes 1 piece at a time)
         for (i in 0 until 64 step 8) {
             val future = executorService.submit {
                 // Use different interpreter for each batch of 8 pieces
                 val interpreterIndex = (i / 8) % 8
                 val interpreter = interpreters[interpreterIndex]!!
-                
-                for (j in i until min(i + 8, 64)) {
+
+                // ✅ CORRECTED: Use minOf instead of min
+                for (j in i until minOf(i + 8, 64)) {
                     val classification = classifyBitmapWithInterpreter(pieces[j], interpreter)
                     classifications[j] = classification
                     Log.d("ParallelClassification", "Processed piece $j with interpreter $interpreterIndex")
@@ -105,32 +106,32 @@ fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation
             }
             futures.add(future)
         }
-        
+
         // Wait for all tasks to complete
         futures.forEach { it.get() }
-        
+
         Log.d("ParallelClassification", "All 64 pieces processed in parallel")
-        
+
         // ✅ Rest of your existing logic remains same...
         val bottomColorPref = Prefs.getString(context, "bottom_color", "")
         val isFirstDetection = bottomColorPref.isEmpty()
         var detectedOrientation = storedOrientation
-        
+
         if (isFirstDetection && storedOrientation == null) {
             val bottomColor = detectBottomColor(classifications.toList())
             Prefs.setString(context, "bottom_color", bottomColor)
             Prefs.setString(context, "board_orientation_detected", "true")
             detectedOrientation = (bottomColor == "White")
-            
+
             Toast.makeText(context, "First detection: $bottomColor pieces at bottom", Toast.LENGTH_LONG).show()
             Log.d("ChessOrientation", "First detection: $bottomColor pieces at bottom, orientation: ${if (detectedOrientation) "normal" else "reversed"}")
         } else if (storedOrientation == null) {
             detectedOrientation = detectOrientation(classifications.toList())
         }
-        
+
         val uciMapping = createUCIResult(classifications.toList(), detectedOrientation ?: true, context)
         callback(uciMapping, detectedOrientation ?: true)
-        
+
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Classification error: ${e.message}", Toast.LENGTH_SHORT).show()
