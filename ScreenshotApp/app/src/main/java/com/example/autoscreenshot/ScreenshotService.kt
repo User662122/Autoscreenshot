@@ -165,33 +165,36 @@ class ScreenshotService : Service() {
     }
 
     private fun captureScreenshot() {
-        try {
-            val image = imageReader?.acquireLatestImage()
-            if (image != null) {
-                Log.d(TAG, "Image acquired successfully")
-                val bitmap = imageToBitmap(image)
-                image.close()
+    try {
+        val image = imageReader?.acquireLatestImage()
+        if (image != null) {
+            Log.d(TAG, "Image acquired successfully")
+            val bitmap = imageToBitmap(image)
+            image.close()
 
-                if (bitmap != null) {
-                    // Crop the chess board region
-                    val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
+            if (bitmap != null) {
+                // Crop the chess board region
+                val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
 
-                    // Process 64 pieces
-                    save64Pieces(cropped)
+                // Process 64 pieces
+                save64Pieces(cropped)
 
-                    Log.d(TAG, "64 screenshot pieces processed successfully")
-                } else {
-                    Log.e(TAG, "Failed to convert image to bitmap")
-                }
+                Log.d(TAG, "64 screenshot pieces processed successfully")
+
+                // 🔥 FIX: Recycle parent bitmaps to clear RAM
+                cropped.recycle()
+                bitmap.recycle()
             } else {
-                Log.d(TAG, "No image available")
+                Log.e(TAG, "Failed to convert image to bitmap")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error capturing screenshot: ${e.message}")
-            e.printStackTrace()
+        } else {
+            Log.d(TAG, "No image available")
         }
+    } catch (e: Exception) {
+        Log.e(TAG, "Error capturing screenshot: ${e.message}")
+        e.printStackTrace()
     }
-
+}
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
             val planes = image.planes
