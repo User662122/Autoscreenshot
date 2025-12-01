@@ -38,7 +38,6 @@ object NetworkManager {
                 val url = "$ngrokUrl/start"
 
                 Log.d(TAG, "Sending start color: $color to $url")
-                showToast(context, "🌐 POST /start: $color")
 
                 val requestBody = color.toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -53,7 +52,10 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Start color sent, response: $bodyString")
-                    showToast(context, "✅ /start → $bodyString")
+                    // Show only AI move response
+                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
+                        showToast(context, "AI: $bodyString")
+                    }
                 } else {
                     Log.e(TAG, "Failed: ${response.code} - ${response.message}")
                     showToast(context, "❌ /start failed: ${response.code}")
@@ -90,7 +92,6 @@ object NetworkManager {
                 val positionData = "white:$whiteStr;black:$blackStr"
 
                 Log.d(TAG, "Sending positions to $url: $positionData")
-                showToast(context, "🌐 POST /move: W:${whitePositions.size} B:${blackPositions.size}")
 
                 val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -105,7 +106,10 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Positions sent, response: $bodyString")
-                    showToast(context, "✅ /move → $bodyString")
+                    // Show only AI move response
+                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
+                        showToast(context, "AI: $bodyString")
+                    }
                 } else {
                     Log.e(TAG, "Failed: ${response.code} - ${response.message}")
                     showToast(context, "❌ /move failed: ${response.code}")
@@ -133,7 +137,6 @@ object NetworkManager {
                 val url = "$ngrokUrl/move"
 
                 Log.d(TAG, "Sending move: $move → $url")
-                showToast(context, "🌐 POST /move: $move")
 
                 val requestBody = move.toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -148,7 +151,10 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Move sent, AI Response: $bodyString")
-                    showToast(context, "✅ AI → $bodyString")
+                    // Show only AI move response
+                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
+                        showToast(context, "AI: $bodyString")
+                    }
                 } else {
                     Log.e(TAG, "Failed: ${response.code} - ${response.message}")
                     showToast(context, "❌ Failed: ${response.code}")
