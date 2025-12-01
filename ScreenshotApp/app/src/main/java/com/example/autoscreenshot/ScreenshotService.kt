@@ -59,13 +59,11 @@ class ScreenshotService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         modelManager = TFLiteModelManager(this)
-        showToast("ðŸ“± Screenshot Service Started")
         Log.d(TAG, "ScreenshotService created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
-        showToast("ðŸš€ Initializing Screenshot Service...")
 
         // Reset states when service starts fresh
         storedOrientation = null
@@ -74,7 +72,6 @@ class ScreenshotService : Service() {
 
         // Reset ALL game data in SharedPreferences (keeps ngrok_url in AutoScreenshotPrefs)
         Prefs.resetAllGameData(this)
-        showToast("ðŸ§¹ Game state reset - Fresh start!")
         Log.d(TAG, "All game data reset for fresh session")
 
         // Mark service as active
@@ -85,7 +82,7 @@ class ScreenshotService : Service() {
 
         if (resultCode != Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Invalid result code or data")
-            showToast("âŒ Invalid permissions")
+            showToast("❌ Invalid permissions")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -109,15 +106,13 @@ class ScreenshotService : Service() {
             // Add 15-second delay before starting screenshot capture
             handler.postDelayed({
                 handler.post(screenshotRunnable)
-                showToast("âœ… Screenshot capture started!")
                 Log.d(TAG, "Screenshot capture started after 15-second delay")
             }, 15000)
 
-            showToast("â° Starting in 15 seconds...")
             Log.d(TAG, "Screenshot capture will begin in 15 seconds")
         } catch (e: Exception) {
             Log.e(TAG, "Error starting screenshot service: ${e.message}")
-            showToast("âŒ Error: ${e.message}")
+            showToast("❌ Error: ${e.message}")
             e.printStackTrace()
             stopSelf()
         }
@@ -159,7 +154,7 @@ class ScreenshotService : Service() {
             Log.d(TAG, "Virtual display setup completed")
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up virtual display: ${e.message}")
-            showToast("âŒ Display setup error")
+            showToast("❌ Display setup error")
             e.printStackTrace()
         }
     }
@@ -246,8 +241,7 @@ class ScreenshotService : Service() {
             if (!hasStoredOrientation) {
                 storedOrientation = orientation
                 hasStoredOrientation = true
-                showToast("ðŸŽ¯ Board detected: ${if (orientation) "Normal" else "Reversed"}")
-                
+                Log.d(TAG, "Board orientation stored: $orientation")
             }
 
             // Send data to backend
@@ -268,78 +262,72 @@ class ScreenshotService : Service() {
                 val bottomColor = Prefs.getString(this@ScreenshotService, "bottom_color", "")
                 
                 // Send start color only once
-                if (!hasStartColorSent && bottomColor.isNotEmpty()) 
-                    
+                if (!hasStartColorSent && bottomColor.isNotEmpty()) {
                     val colorLower = bottomColor.lowercase()
                     val (startSuccess, startResponse) = NetworkManager.sendStartColor(this@ScreenshotService, colorLower)
                     
                     if (startSuccess) {
                         hasStartColorSent = true
-                        showToast("âœ… START OK | AI: $startResponse")
-                                       
+                        Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
+                        
                         // Store AI move in SharedPreferences for AccessibilityService
-                if (startResponse.isNotEmpty() && startResponse != "Invalid" && startResponse != "Game Over") {
-    Prefs.setString(this@ScreenshotService, "pending_ai_move", startResponse)
-    
-    // Verify it was saved
-    val verification = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
-    Log.d(TAG, "Verification - Read back from Prefs: $verification")
-    // Toast messages removed from here
-} else {
-    // Toast message removed from here
-    Log.w(TAG, "AI response empty or invalid: $startResponse")
-}
-} else {
-    Log.e(TAG, "Failed to send start color. Response: $startResponse")
-}
+                        if (startResponse.isNotEmpty() && startResponse != "Invalid" && startResponse != "Game Over") {
+                            Prefs.setString(this@ScreenshotService, "pending_ai_move", startResponse)
+                            Log.d(TAG, "Stored pending AI move: $startResponse")
+                            
+                            // Verify it was saved
+                            val verification = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
+                            Log.d(TAG, "Verification - Read back from Prefs: $verification")
+                        }
+                    } else {
+                        Log.e(TAG, "Failed to send start color. Response: $startResponse")
+                    }
+                }
 
                 // Get piece positions from SharedPreferences
                 val whiteUCI = Prefs.getString(this@ScreenshotService, "uci_white", "")
-val blackUCI = Prefs.getString(this@ScreenshotService, "uci_black", "")
+                val blackUCI = Prefs.getString(this@ScreenshotService, "uci_black", "")
 
-if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
-    // Convert comma-separated strings to lists
-    val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-    val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
+                    // Convert comma-separated strings to lists
+                    val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
-    // Send piece positions
-    val (positionSuccess, positionResponse) = NetworkManager.sendPiecePositions(
-        this@ScreenshotService,
-        whitePositions,
-        blackPositions
-    )
+                    // Send piece positions
+                    val (positionSuccess, positionResponse) = NetworkManager.sendPiecePositions(
+                        this@ScreenshotService,
+                        whitePositions,
+                        blackPositions
+                    )
 
-    if (positionSuccess) {
-        Log.d(TAG, "Piece positions sent successfully. Response: $positionResponse")
-        
-        // Store AI move in SharedPreferences for AccessibilityService
-        if (positionResponse.isNotEmpty() && positionResponse != "Invalid" && positionResponse != "Game Over") {
-            Prefs.setString(this@ScreenshotService, "pending_ai_move", positionResponse)
-            Log.d(TAG, "Stored pending AI move: $positionResponse")
-            
-            // Verify it was saved
-            val verification = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
-            Log.d(TAG, "Verification - Read back from Prefs: $verification")
-        } else {
-            Log.w(TAG, "AI response empty or invalid: $positionResponse")
+                    if (positionSuccess) {
+                        Log.d(TAG, "Piece positions sent successfully. Response: $positionResponse")
+                        
+                        // Store AI move in SharedPreferences for AccessibilityService
+                        if (positionResponse.isNotEmpty() && positionResponse != "Invalid" && positionResponse != "Game Over") {
+                            Prefs.setString(this@ScreenshotService, "pending_ai_move", positionResponse)
+                            Log.d(TAG, "Stored pending AI move: $positionResponse")
+                            
+                            // Verify it was saved
+                            val verification = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
+                            Log.d(TAG, "Verification - Read back from Prefs: $verification")
+                        }
+                        
+                        showNotification("Data Sent", "Board state sent to backend")
+                    } else {
+                        Log.e(TAG, "Failed to send piece positions. Response: $positionResponse")
+                        showNotification("Error", "Failed to send board state")
+                    }
+                } else {
+                    Log.w(TAG, "No piece positions available to send")
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
+                e.printStackTrace()
+            }
         }
-        
-        showNotification("Data Sent", "Board state sent to backend")
-    } else {
-        showToast("❌ Position send failed!")
-        Log.e(TAG, "Failed to send piece positions. Response: $positionResponse")
-        showNotification("Error", "Failed to send board state")
     }
-} else {
-    showToast("⚠️ No positions available")
-    Log.w(TAG, "No piece positions available to send")
-}
-
-} catch (e: Exception) {
-    showToast("❌ Exception: ${e.message}")
-    Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
-    e.printStackTrace()
-}
 
     private fun showToast(message: String) {
         handler.post {
@@ -401,7 +389,6 @@ if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
 
     override fun onDestroy() {
         super.onDestroy()
-        showToast("ðŸ›‘ Screenshot Service Stopped")
         Log.d(TAG, "ScreenshotService destroying")
         
         isCapturing = false
