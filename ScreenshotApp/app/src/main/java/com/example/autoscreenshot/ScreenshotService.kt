@@ -20,7 +20,7 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -35,22 +35,16 @@ class ScreenshotService : Service() {
     private var isCapturing = false
     private lateinit var modelManager: TFLiteModelManager
 
-    // Coroutine scope for network calls
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // ✅ FIX: Background dispatcher for screenshot processing
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO) // Changed to IO
 
     // Store orientation and track if start color was sent
     private var storedOrientation: Boolean? = null
     private var hasStoredOrientation = false
     private var hasStartColorSent = false
 
-    private val screenshotRunnable = object : Runnable {
-        override fun run() {
-            if (isCapturing) {
-                captureScreenshot()
-                handler.postDelayed(this, 3000)
-            }
-        }
-    }
+    // ✅ FIX: Removed Main Thread Handler Runnable
+    private var captureJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -103,11 +97,21 @@ class ScreenshotService : Service() {
             setupVirtualDisplay()
             isCapturing = true
 
-            // Add 15-second delay before starting screenshot capture
-            handler.postDelayed({
-                handler.post(screenshotRunnable)
-                Log.d(TAG, "Screenshot capture started after 15-second delay")
-            }, 15000)
+            // ✅ FIX: Start periodic capture in background coroutine
+            captureJob = serviceScope.launch {
+                delay(15000) // Initial 15-second delay
+                
+                while (isActive && isCapturing) {
+                    try {
+                        captureScreenshot()
+                        delay(3000) // Wait 3 seconds between captures
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in capture loop: ${e.message}")
+                        e.printStackTrace()
+                        delay(5000) // Longer delay on error
+                    }
+                }
+            }
 
             Log.d(TAG, "Screenshot capture will begin in 15 seconds")
         } catch (e: Exception) {
@@ -159,28 +163,31 @@ class ScreenshotService : Service() {
         }
     }
 
-    private fun captureScreenshot() {
+    // ✅ FIX: Moved to background thread and improved resource management
+    private suspend fun captureScreenshot() = withContext(Dispatchers.IO) {
     try {
         val image = imageReader?.acquireLatestImage()
         if (image != null) {
             Log.d(TAG, "Image acquired successfully")
-            val bitmap = imageToBitmap(image)
-            image.close()
-
-            if (bitmap != null) {
-                // Crop the chess board region
-                val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
-
-                // Process 64 pieces
-                save64Pieces(cropped)
-
-                Log.d(TAG, "64 screenshot pieces processed successfully")
-
-                // 🔥 FIX: Recycle parent bitmaps to clear RAM
-                cropped.recycle()
-                bitmap.recycle()
-            } else {
-                Log.e(TAG, "Failed to convert image to bitmap")
+            
+            // ✅ FIX: Ensure image is always closed
+            try {
+                val bitmap = imageToBitmap(image)
+                
+                if (bitmap != null) {
+                    // Crop the chess board region
+                    val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
+                    
+                    // Process 64 pieces
+                    save64Pieces(cropped, bitmap)
+                    
+                    Log.d(TAG, "64 screenshot pieces processed successfully")
+                } else {
+                    Log.e(TAG, "Failed to convert image to bitmap")
+                }
+            } finally {
+                // ✅ FIX: Always close the image to release system buffer
+                image.close()
             }
         } else {
             Log.d(TAG, "No image available")
@@ -190,6 +197,7 @@ class ScreenshotService : Service() {
         e.printStackTrace()
     }
 }
+
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
             val planes = image.planes
@@ -217,42 +225,52 @@ class ScreenshotService : Service() {
         return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
     }
 
-    private fun save64Pieces(bmp: Bitmap) {
-        val cellW = bmp.width / 8
-        val cellH = bmp.height / 8
+    // ✅ FIX: Pass parent bitmaps for proper recycling
+    private suspend fun save64Pieces(croppedBoard: Bitmap, fullBitmap: Bitmap) = withContext(Dispatchers.IO) {
+        val cellW = croppedBoard.width / 8
+        val cellH = croppedBoard.height / 8
         val pieces = mutableListOf<Bitmap>()
 
-        for (r in 0 until 8) {
-            for (c in 0 until 8) {
-                val x = c * cellW
-                val y = r * cellH
+        try {
+            for (r in 0 until 8) {
+                for (c in 0 until 8) {
+                    val x = c * cellW
+                    val y = r * cellH
 
-                val piece = Bitmap.createBitmap(bmp, x, y, cellW, cellH)
-                val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+                    val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
+                    val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
 
-                pieces.add(resized)
-                piece.recycle()
-            }
-        }
-
-        // Classify chess board and send to backend
-        modelManager.classifyChessBoard(pieces, this, storedOrientation) { uciMapping, orientation ->
-            // Store orientation for future use
-            if (!hasStoredOrientation) {
-                storedOrientation = orientation
-                hasStoredOrientation = true
-                Log.d(TAG, "Board orientation stored: $orientation")
+                    pieces.add(resized)
+                    piece.recycle() // Recycle intermediate bitmap
+                }
             }
 
-            // Send data to backend
-            sendDataToBackend()
+            // ✅ FIX: Use async classification and handle bitmaps safely
+            modelManager.classifyChessBoardAsync(pieces, this@ScreenshotService, storedOrientation) { uciMapping, orientation ->
+                // Store orientation for future use
+                if (!hasStoredOrientation) {
+                    storedOrientation = orientation
+                    hasStoredOrientation = true
+                    Log.d(TAG, "Board orientation stored: $orientation")
+                }
 
-            // Show notification
-            showNotification("Chess Board Detected", uciMapping)
+                // Send data to backend
+                sendDataToBackend()
+
+                // Show notification
+                showNotification("Chess Board Detected", uciMapping)
+            }
+        } finally {
+            // ✅ FIX: Ensure all bitmaps are recycled
+            try {
+                pieces.forEach { it.recycle() }
+                croppedBoard.recycle()
+                fullBitmap.recycle()
+                Log.d(TAG, "All bitmaps recycled successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error recycling bitmaps: ${e.message}")
+            }
         }
-
-        // Clean up
-        pieces.forEach { it.recycle() }
     }
 
     private fun sendDataToBackend() {
@@ -392,7 +410,10 @@ class ScreenshotService : Service() {
         Log.d(TAG, "ScreenshotService destroying")
         
         isCapturing = false
-        handler.removeCallbacks(screenshotRunnable)
+        
+        // ✅ FIX: Cancel capture job
+        captureJob?.cancel()
+        
         virtualDisplay?.release()
         imageReader?.close()
         mediaProjection?.stop()
