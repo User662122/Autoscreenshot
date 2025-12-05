@@ -1,6 +1,10 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+
+    // Firebase plugins
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {
@@ -16,12 +20,15 @@ android {
     }
 
     buildTypes {
+
         release {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // No proguard needed for now since you don’t have rules
+        }
+
+        debug {
+            // Enable Crashlytics in debug builds too (helpful for testing crashes)
+            isDebuggable = true
         }
     }
 
@@ -44,18 +51,28 @@ android {
 }
 
 dependencies {
+    // Firebase BOM (keeps all versions compatible)
+    implementation(platform("com.google.firebase:firebase-bom:34.6.0"))
+
+    // Firebase Analytics
+    implementation("com.google.firebase:firebase-analytics")
+
+    // Firebase Crashlytics
+    implementation("com.google.firebase:firebase-crashlytics")
+
+    // Your existing dependencies
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-    
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    
+
     // OkHttp
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    
+
     // TensorFlow Lite
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
