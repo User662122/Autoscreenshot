@@ -11,11 +11,17 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import java.io.FileInputStream
 import java.util.concurrent.Executors
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class TFLiteModelManager(context: Context) {
     private var interpreters: Array<Interpreter?> = arrayOfNulls(8)
     private val MODEL_PATH = "wbe_mnv2_96.tflite"
     private val executorService = Executors.newFixedThreadPool(8)
+    
+    // ✅ FIX: Add coroutine scope for async operations
+    private val modelScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     
     // Class names in the same order as your training
     private val classNames = arrayOf("White", "Black", "Empty")
@@ -74,69 +80,96 @@ class TFLiteModelManager(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-// ✅ MODIFIED: Optimized parallel classification using 8 interpreters
-fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
-    if (interpreters[0] == null) {
-        Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
-        return
-    }
-
-    if (pieces.size != 64) {
-        Toast.makeText(context, "Need exactly 64 pieces for chess board", Toast.LENGTH_SHORT).show()
-        return
-    }
-
-    try {
-        val classifications = Array(64) { "" }
-        val futures = mutableListOf<java.util.concurrent.Future<*>>()
-
-        // Process 8 pieces in parallel (each interpreter processes 1 piece at a time)
-        for (i in 0 until 64 step 8) {
-            val future = executorService.submit {
-                // Use different interpreter for each batch of 8 pieces
-                val interpreterIndex = (i / 8) % 8
-                val interpreter = interpreters[interpreterIndex]!!
-
-                // ✅ CORRECTED: Use minOf instead of min
-                for (j in i until minOf(i + 8, 64)) {
-                    val classification = classifyBitmapWithInterpreter(pieces[j], interpreter)
-                    classifications[j] = classification
-                    Log.d("ParallelClassification", "Processed piece $j with interpreter $interpreterIndex")
-                }
+    // ✅ FIX: New async version that doesn't block Main Thread
+    suspend fun classifyChessBoardAsync(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
+        if (interpreters[0] == null) {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
             }
-            futures.add(future)
+            return
         }
 
-        // Wait for all tasks to complete
-        futures.forEach { it.get() }
-
-        Log.d("ParallelClassification", "All 64 pieces processed in parallel")
-
-        // ✅ Rest of your existing logic remains same...
-        val bottomColorPref = Prefs.getString(context, "bottom_color", "")
-        val isFirstDetection = bottomColorPref.isEmpty()
-        var detectedOrientation = storedOrientation
-
-        if (isFirstDetection && storedOrientation == null) {
-            val bottomColor = detectBottomColor(classifications.toList())
-            Prefs.setString(context, "bottom_color", bottomColor)
-            Prefs.setString(context, "board_orientation_detected", "true")
-            detectedOrientation = (bottomColor == "White")
-
-            Toast.makeText(context, "First detection: $bottomColor pieces at bottom", Toast.LENGTH_LONG).show()
-            Log.d("ChessOrientation", "First detection: $bottomColor pieces at bottom, orientation: ${if (detectedOrientation) "normal" else "reversed"}")
-        } else if (storedOrientation == null) {
-            detectedOrientation = detectOrientation(classifications.toList())
+        if (pieces.size != 64) {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Need exactly 64 pieces for chess board", Toast.LENGTH_SHORT).show()
+            }
+            return
         }
 
-        val uciMapping = createUCIResult(classifications.toList(), detectedOrientation ?: true, context)
-        callback(uciMapping, detectedOrientation ?: true)
+        try {
+            // Perform classification in background
+            val result = withContext(Dispatchers.Default) {
+                classifyInBackground(pieces, context, storedOrientation)
+            }
+            
+            // Execute callback on Main Thread
+            withContext(Dispatchers.Main) {
+                callback(result.first, result.second)
+            }
 
-    } catch (e: Exception) {
-        e.printStackTrace()
-        Toast.makeText(context, "Classification error: ${e.message}", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e("TFLiteModelManager", "Classification error: ${e.message}")
+            e.printStackTrace()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Classification error: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
-}
+    
+    // ✅ FIX: Background classification without blocking
+    private suspend fun classifyInBackground(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?): Pair<String, Boolean> {
+        return withContext(Dispatchers.Default) {
+            val classifications = Array(64) { "" }
+            val deferredResults = mutableListOf<Deferred<Unit>>()
+
+            // Process 8 pieces in parallel using coroutines
+            for (i in 0 until 64 step 8) {
+                val deferred = modelScope.async {
+                    val interpreterIndex = (i / 8) % 8
+                    val interpreter = interpreters[interpreterIndex]!!
+
+                    for (j in i until minOf(i + 8, 64)) {
+                        val classification = classifyBitmapWithInterpreter(pieces[j], interpreter)
+                        classifications[j] = classification
+                        Log.d("ParallelClassification", "Processed piece $j with interpreter $interpreterIndex")
+                    }
+                }
+                deferredResults.add(deferred)
+            }
+
+            // ✅ FIX: Use awaitAll instead of blocking get()
+            deferredResults.awaitAll()
+
+            Log.d("ParallelClassification", "All 64 pieces processed in parallel")
+
+            val bottomColorPref = Prefs.getString(context, "bottom_color", "")
+            val isFirstDetection = bottomColorPref.isEmpty()
+            var detectedOrientation = storedOrientation
+
+            if (isFirstDetection && storedOrientation == null) {
+                val bottomColor = detectBottomColor(classifications.toList())
+                Prefs.setString(context, "bottom_color", bottomColor)
+                Prefs.setString(context, "board_orientation_detected", "true")
+                detectedOrientation = (bottomColor == "White")
+
+                Log.d("ChessOrientation", "First detection: $bottomColor pieces at bottom, orientation: ${if (detectedOrientation) "normal" else "reversed"}")
+            } else if (storedOrientation == null) {
+                detectedOrientation = detectOrientation(classifications.toList())
+            }
+
+            val uciMapping = createUCIResult(classifications.toList(), detectedOrientation ?: true, context)
+            Pair(uciMapping, detectedOrientation ?: true)
+        }
+    }
+
+    // Keep old synchronous version for backward compatibility (but mark as deprecated)
+    fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
+        Log.w("TFLiteModelManager", "Using deprecated synchronous classifyChessBoard. Use classifyChessBoardAsync instead.")
+        
+        modelScope.launch {
+            classifyChessBoardAsync(pieces, context, storedOrientation, callback)
+        }
+    }
 
     // ✅ NEW: Classify bitmap with specific interpreter
     private fun classifyBitmapWithInterpreter(bitmap: Bitmap, interpreter: Interpreter): String {
@@ -209,63 +242,60 @@ fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation
     }
 
     private fun createUCIResult(classifications: List<String>, orientation: Boolean, context: Context): String {
-    // Choose mapping based on the provided orientation
-    val chessSquares = if (orientation) {
-        chessSquaresNormal
-    } else {
-        chessSquaresReversed
-    }
-    
-    // Build FEN-like representation with CURRENT piece positions
-    val whitePieces = mutableListOf<String>()
-    val blackPieces = mutableListOf<String>()
-    
-    for (i in classifications.indices) {
-        when (classifications[i]) {
-            "White" -> whitePieces.add(chessSquares[i])
-            "Black" -> blackPieces.add(chessSquares[i])
-            // Empty squares are not tracked
+        // Choose mapping based on the provided orientation
+        val chessSquares = if (orientation) {
+            chessSquaresNormal
+        } else {
+            chessSquaresReversed
         }
+        
+        // Build FEN-like representation with CURRENT piece positions
+        val whitePieces = mutableListOf<String>()
+        val blackPieces = mutableListOf<String>()
+        
+        for (i in classifications.indices) {
+            when (classifications[i]) {
+                "White" -> whitePieces.add(chessSquares[i])
+                "Black" -> blackPieces.add(chessSquares[i])
+                // Empty squares are not tracked
+            }
+        }
+        
+        // ✅ FIX: Sort the pieces in alphabetical order
+        whitePieces.sort()
+        blackPieces.sort()
+        
+        // Create UCI format strings
+        val whiteUCI = whitePieces.joinToString(",")
+        val blackUCI = blackPieces.joinToString(",")
+        val mappingType = if (orientation) "normal" else "reversed"
+        
+        // Save to SharedPreferences using Prefs utility
+        Prefs.setString(context, "uci_white", whiteUCI)
+        Prefs.setString(context, "uci_black", blackUCI)
+        Prefs.setString(context, "uci_mapping", mappingType)
+        
+        // Create combined UCI string
+        val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
+        Prefs.setString(context, "uci", combinedUCI)
+        
+        // Create display message with CURRENT positions
+        val message = buildString {
+            append("White: ")
+            append(whitePieces.joinToString(", "))
+            append("\nBlack: ")
+            append(blackPieces.joinToString(", "))
+            append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
+        }
+        
+        // Also log for debugging
+        Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
+        Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
+        Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
+        Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
+        
+        return message
     }
-    
-    // ✅ FIX: Sort the pieces in alphabetical order
-    whitePieces.sort()
-    blackPieces.sort()
-    
-    // Create UCI format strings
-    val whiteUCI = whitePieces.joinToString(",")
-    val blackUCI = blackPieces.joinToString(",")
-    val mappingType = if (orientation) "normal" else "reversed"
-    
-    // Save to SharedPreferences using Prefs utility
-    Prefs.setString(context, "uci_white", whiteUCI)
-    Prefs.setString(context, "uci_black", blackUCI)
-    Prefs.setString(context, "uci_mapping", mappingType)
-    
-    // Create combined UCI string
-    val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
-    Prefs.setString(context, "uci", combinedUCI)
-    
-    // Create display message with CURRENT positions
-    val message = buildString {
-        append("White: ")
-        append(whitePieces.joinToString(", "))
-        append("\nBlack: ")
-        append(blackPieces.joinToString(", "))
-        append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
-    }
-    
-    // Show Toast with CURRENT UCI mapping
-   // Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-    
-    // Also log for debugging
-    Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
-    Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
-    Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
-    Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
-    
-    return message
-}
 
     fun getInterpreter(index: Int = 0): Interpreter? {
         return if (index in 0..7) interpreters[index] else interpreters[0]
@@ -276,6 +306,7 @@ fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation
     }
 
     fun close() {
+        modelScope.cancel()
         for (i in 0 until 8) {
             interpreters[i]?.close()
         }
