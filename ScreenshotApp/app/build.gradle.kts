@@ -1,8 +1,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-
-    // Firebase plugins
     id("com.google.gms.google-services")
     id("com.google.firebase.crashlytics")
 }
@@ -20,15 +18,13 @@ android {
     }
 
     buildTypes {
-
         release {
             isMinifyEnabled = false
-            // No proguard needed for now since you don’t have rules
         }
 
         debug {
-            // Enable Crashlytics in debug builds too (helpful for testing crashes)
             isDebuggable = true
+            ext.set("firebaseCrashlyticsCollectionEnabled", true)
         }
     }
 
@@ -51,16 +47,15 @@ android {
 }
 
 dependencies {
-    // Firebase BOM (keeps all versions compatible)
+
+    // Firebase BOM
     implementation(platform("com.google.firebase:firebase-bom:34.6.0"))
 
-    // Firebase Analytics
+    // Firebase Analytics + Crashlytics
     implementation("com.google.firebase:firebase-analytics")
-
-    // Firebase Crashlytics
     implementation("com.google.firebase:firebase-crashlytics")
 
-    // Your existing dependencies
+    // Existing dependencies
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
