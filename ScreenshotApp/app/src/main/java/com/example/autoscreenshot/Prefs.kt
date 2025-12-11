@@ -38,6 +38,28 @@ object Prefs {
         }
     }
 
+    /**
+     * Check if there's a pending AI move waiting to be executed
+     */
+    fun hasPendingMove(context: Context): Boolean {
+        val move = getString(context, "pending_ai_move", "")
+        return move.isNotEmpty()
+    }
+
+    /**
+     * Mark that move execution has started
+     */
+    fun setMoveExecuting(context: Context, isExecuting: Boolean) {
+        setString(context, "move_executing", if (isExecuting) "true" else "false")
+    }
+
+    /**
+     * Check if a move is currently being executed
+     */
+    fun isMoveExecuting(context: Context): Boolean {
+        return getString(context, "move_executing", "false") == "true"
+    }
+
     fun resetAllGameData(context: Context) {
         Log.d(TAG, "Resetting all game data in SharedPreferences")
         
@@ -48,6 +70,7 @@ object Prefs {
             "uci_mapping",
             "uci",
             "pending_ai_move",
+            "move_executing",
             "board_orientation_detected"
         )
         
