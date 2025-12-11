@@ -80,6 +80,26 @@ class ScreenshotService : Service() {
                 delay(15000) // Initial 15-second delay
                 while (isActive && isCapturing) {
                     try {
+                        // Check if there's a pending AI move that hasn't been executed yet
+                        val pendingMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
+                        
+                        if (pendingMove.isNotEmpty()) {
+                            Log.d(TAG, "Pausing screenshot service - waiting for AI move execution: $pendingMove")
+                            
+                            // Wait until the move is executed (ChessMoveAccessibilityService clears it)
+                            while (isActive && isCapturing) {
+                                val currentMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
+                                if (currentMove.isEmpty()) {
+                                    Log.d(TAG, "AI move executed, resuming screenshot service")
+                                    break
+                                }
+                                delay(500) // Check every 500ms
+                            }
+                            
+                            // Add a small delay after move execution before taking next screenshot
+                            delay(2000)
+                        }
+                        
                         captureScreenshot()
                         delay(3000) // Wait 3 seconds between captures
                     } catch (e: Exception) {
