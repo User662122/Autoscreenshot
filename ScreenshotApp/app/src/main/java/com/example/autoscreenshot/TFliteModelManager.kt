@@ -280,8 +280,14 @@ class TFLiteModelManager(private val context: Context) {
                     }
                 }
 
-                // --- NEW LINE: fetch AI move after sending board ---
-                fetchAIMove(ngrokUrl)
+                // ===== FIX: Only fetch AI move if NO pending move exists =====
+                val pendingMove = Prefs.getString(context, "pending_ai_move", "")
+                if (pendingMove.isEmpty()) {
+                    Log.d(TAG, "No pending move, fetching AI move from backend...")
+                    fetchAIMove(ngrokUrl)
+                } else {
+                    Log.d(TAG, "Pending move already exists ($pendingMove), skipping fetch")
+                }
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
@@ -336,9 +342,14 @@ class TFLiteModelManager(private val context: Context) {
             val response = client.newCall(request).execute()
             val body = response.body?.string()?.trim() ?: ""
             response.close()
+            
             if (body.isNotEmpty() && body != "None" && body != "Invalid" && body != "Game Over") {
+                // Only store if it's a valid move
                 Prefs.setString(context, "pending_ai_move", body)
+                Log.d(TAG, "AI move fetched and stored: $body")
                 showToast("AI: $body")
+            } else {
+                Log.d(TAG, "No valid AI move available from backend")
             }
         } catch (e: Exception) {
             Log.e(TAG, "fetchAIMove error: ${e.message}")
