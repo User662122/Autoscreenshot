@@ -3,20 +3,35 @@ package com.example.autoscreenshot
 import android.app.NotificationManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import java.io.FileInputStream
+import java.util.concurrent.TimeUnit
 
 class TFLiteModelManager(private val context: Context) {
     private var interpreters: Array<Interpreter?> = arrayOfNulls(8)
     private val MODEL_PATH = "wbe_mnv2_96.tflite"
+    
+    // HTTP Client for server communication
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+    
+    private val handler = Handler(Looper.getMainLooper())
     
     // Class names in the same order as your training
     private val classNames = arrayOf("White", "Black", "Empty")
@@ -325,16 +340,19 @@ class TFLiteModelManager(private val context: Context) {
     private fun sendDataToBackend(context: Context) {
         CoroutineManager.launchIO {
             try {
+                val ngrokUrl = MainActivity.getNgrokUrl(context)
+                
                 // Send start color if not sent yet
                 val bottomColor = Prefs.getString(context, "bottom_color", "")
                 if (!hasStartColorSent && bottomColor.isNotEmpty()) {
                     val colorLower = bottomColor.lowercase()
-                    val (startSuccess, startResponse) = NetworkManager.sendStartColor(context, colorLower)
+                    val (startSuccess, startResponse) = sendStartColor(ngrokUrl, colorLower)
                     if (startSuccess) {
                         hasStartColorSent = true
                         Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
                         if (startResponse.isNotEmpty() && startResponse != "Invalid" && startResponse != "Game Over") {
                             Prefs.setString(context, "pending_ai_move", startResponse)
+                            showToast("AI: $startResponse")
                         }
                     }
                 }
@@ -345,8 +363,8 @@ class TFLiteModelManager(private val context: Context) {
                 if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
                     val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                     val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    val (positionSuccess, positionResponse) = NetworkManager.sendPiecePositions(
-                        context,
+                    val (positionSuccess, positionResponse) = sendPiecePositions(
+                        ngrokUrl,
                         whitePositions,
                         blackPositions
                     )
@@ -354,6 +372,7 @@ class TFLiteModelManager(private val context: Context) {
                     if (positionSuccess) {
                         if (positionResponse.isNotEmpty() && positionResponse != "Invalid" && positionResponse != "Game Over") {
                             Prefs.setString(context, "pending_ai_move", positionResponse)
+                            showToast("AI: $positionResponse")
                         }
                         Log.d(TAG, "Board state sent to backend successfully")
                     } else {
@@ -365,6 +384,100 @@ class TFLiteModelManager(private val context: Context) {
                 Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
                 e.printStackTrace()
             }
+        }
+    }
+
+    /**
+     * Send starting color to /start endpoint
+     */
+    private suspend fun sendStartColor(ngrokUrl: String, color: String): Pair<Boolean, String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = "$ngrokUrl/start"
+                Log.d(TAG, "Sending start color: $color to $url")
+
+                val requestBody = color.toRequestBody("text/plain".toMediaTypeOrNull())
+                val request = Request.Builder()
+                    .url(url)
+                    .post(requestBody)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val bodyString = response.body?.string()?.trim() ?: ""
+                val success = response.isSuccessful
+
+                if (success) {
+                    Log.d(TAG, "Start color sent, response: $bodyString")
+                } else {
+                    Log.e(TAG, "Failed: ${response.code} - ${response.message}")
+                    showToast("✗ /start failed: ${response.code}")
+                }
+
+                response.close()
+                Pair(success, bodyString)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending start color: ${e.message}")
+                showToast("✗ Network error: ${e.message?.take(30)}")
+                e.printStackTrace()
+                Pair(false, "")
+            }
+        }
+    }
+
+    /**
+     * Send piece positions format: "white:a1,a2;black:a7,a8"
+     */
+    private suspend fun sendPiecePositions(
+        ngrokUrl: String,
+        whitePositions: List<String>,
+        blackPositions: List<String>
+    ): Pair<Boolean, String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = "$ngrokUrl/move"
+
+                val whiteStr = whitePositions.joinToString(",")
+                val blackStr = blackPositions.joinToString(",")
+                val positionData = "white:$whiteStr;black:$blackStr"
+
+                Log.d(TAG, "Sending positions to $url: $positionData")
+
+                val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
+                val request = Request.Builder()
+                    .url(url)
+                    .post(requestBody)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val bodyString = response.body?.string()?.trim() ?: ""
+                val success = response.isSuccessful
+
+                if (success) {
+                    Log.d(TAG, "Positions sent, response: $bodyString")
+                } else {
+                    Log.e(TAG, "Failed: ${response.code} - ${response.message}")
+                    showToast("✗ /move failed: ${response.code}")
+                }
+
+                response.close()
+                Pair(success, bodyString)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending piece positions: ${e.message}")
+                showToast("✗ Network error: ${e.message?.take(30)}")
+                e.printStackTrace()
+                Pair(false, "")
+            }
+        }
+    }
+
+    /**
+     * Show toast on UI thread
+     */
+    private fun showToast(message: String) {
+        handler.post {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
 
