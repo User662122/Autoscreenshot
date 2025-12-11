@@ -20,12 +20,6 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.withContext
 
 class ScreenshotService : Service() {
     private var mediaProjection: MediaProjection? = null
@@ -35,16 +29,13 @@ class ScreenshotService : Service() {
     private var isCapturing = false
     private lateinit var modelManager: TFLiteModelManager
 
-    // ✅ FIX: Background dispatcher for screenshot processing
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO) // Changed to IO
+    // ✅ FIX: Removed old coroutine scope and using CoroutineManager
+    private var captureJob: Job? = null
 
     // Store orientation and track if start color was sent
     private var storedOrientation: Boolean? = null
     private var hasStoredOrientation = false
     private var hasStartColorSent = false
-
-    // ✅ FIX: Removed Main Thread Handler Runnable
-    private var captureJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -97,8 +88,8 @@ class ScreenshotService : Service() {
             setupVirtualDisplay()
             isCapturing = true
 
-            // ✅ FIX: Start periodic capture in background coroutine
-            captureJob = serviceScope.launch {
+            // ✅ FIX: Start periodic capture using CoroutineManager
+            captureJob = CoroutineManager.launchIO {
                 delay(15000) // Initial 15-second delay
                 
                 while (isActive && isCapturing) {
@@ -163,40 +154,44 @@ class ScreenshotService : Service() {
         }
     }
 
-    // ✅ FIX: Moved to background thread and improved resource management
-    private suspend fun captureScreenshot() = withContext(Dispatchers.IO) {
-    try {
-        val image = imageReader?.acquireLatestImage()
-        if (image != null) {
-            Log.d(TAG, "Image acquired successfully")
-            
-            // ✅ FIX: Ensure image is always closed
-            try {
-                val bitmap = imageToBitmap(image)
+    // ✅ FIX: Using CoroutineManager for background processing
+    private suspend fun captureScreenshot() {
+        try {
+            val image = imageReader?.acquireLatestImage()
+            if (image != null) {
+                Log.d(TAG, "Image acquired successfully")
                 
-                if (bitmap != null) {
-                    // Crop the chess board region
-                    val cropped = cropBitmap(bitmap, 11, 505, 709, 1201)
+                // ✅ FIX: Ensure image is always closed
+                try {
+                    val bitmap = CoroutineManager.launchDefault {
+                        imageToBitmap(image)
+                    }.await()
                     
-                    // Process 64 pieces
-                    save64Pieces(cropped, bitmap)
-                    
-                    Log.d(TAG, "64 screenshot pieces processed successfully")
-                } else {
-                    Log.e(TAG, "Failed to convert image to bitmap")
+                    if (bitmap != null) {
+                        // Crop the chess board region
+                        val cropped = CoroutineManager.launchDefault {
+                            cropBitmap(bitmap, 11, 505, 709, 1201)
+                        }.await()
+                        
+                        // Process 64 pieces
+                        save64Pieces(cropped, bitmap)
+                        
+                        Log.d(TAG, "64 screenshot pieces processed successfully")
+                    } else {
+                        Log.e(TAG, "Failed to convert image to bitmap")
+                    }
+                } finally {
+                    // ✅ FIX: Always close the image to release system buffer
+                    image.close()
                 }
-            } finally {
-                // ✅ FIX: Always close the image to release system buffer
-                image.close()
+            } else {
+                Log.d(TAG, "No image available")
             }
-        } else {
-            Log.d(TAG, "No image available")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error capturing screenshot: ${e.message}")
+            e.printStackTrace()
         }
-    } catch (e: Exception) {
-        Log.e(TAG, "Error capturing screenshot: ${e.message}")
-        e.printStackTrace()
     }
-}
 
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
@@ -225,56 +220,62 @@ class ScreenshotService : Service() {
         return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
     }
 
-    // ✅ FIX: Pass parent bitmaps for proper recycling
-    private suspend fun save64Pieces(croppedBoard: Bitmap, fullBitmap: Bitmap) = withContext(Dispatchers.IO) {
-        val cellW = croppedBoard.width / 8
-        val cellH = croppedBoard.height / 8
-        val pieces = mutableListOf<Bitmap>()
+    // ✅ FIX: Using CoroutineManager for piece processing
+    private fun save64Pieces(croppedBoard: Bitmap, fullBitmap: Bitmap) {
+        CoroutineManager.launchIO {
+            val cellW = croppedBoard.width / 8
+            val cellH = croppedBoard.height / 8
+            val pieces = mutableListOf<Bitmap>()
 
-        try {
-            for (r in 0 until 8) {
-                for (c in 0 until 8) {
-                    val x = c * cellW
-                    val y = r * cellH
-
-                    val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
-                    val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-
-                    pieces.add(resized)
-                    piece.recycle() // Recycle intermediate bitmap
-                }
-            }
-
-            // ✅ FIX: Use async classification and handle bitmaps safely
-            modelManager.classifyChessBoardAsync(pieces, this@ScreenshotService, storedOrientation) { uciMapping, orientation ->
-                // Store orientation for future use
-                if (!hasStoredOrientation) {
-                    storedOrientation = orientation
-                    hasStoredOrientation = true
-                    Log.d(TAG, "Board orientation stored: $orientation")
-                }
-
-                // Send data to backend
-                sendDataToBackend()
-
-                // Show notification
-                showNotification("Chess Board Detected", uciMapping)
-            }
-        } finally {
-            // ✅ FIX: Ensure all bitmaps are recycled
             try {
-                pieces.forEach { it.recycle() }
-                croppedBoard.recycle()
-                fullBitmap.recycle()
-                Log.d(TAG, "All bitmaps recycled successfully")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error recycling bitmaps: ${e.message}")
+                for (r in 0 until 8) {
+                    for (c in 0 until 8) {
+                        val x = c * cellW
+                        val y = r * cellH
+
+                        val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
+                        val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+
+                        pieces.add(resized)
+                        piece.recycle() // Recycle intermediate bitmap
+                    }
+                }
+
+                // ✅ FIX: Using CoroutineManager for ML classification
+                CoroutineManager.launchDefault {
+                    modelManager.classifyChessBoardAsync(pieces, this@ScreenshotService, storedOrientation) { uciMapping, orientation ->
+                        // Store orientation for future use
+                        if (!hasStoredOrientation) {
+                            storedOrientation = orientation
+                            hasStoredOrientation = true
+                            Log.d(TAG, "Board orientation stored: $orientation")
+                        }
+
+                        // Send data to backend
+                        sendDataToBackend()
+
+                        // Show notification on main thread
+                        CoroutineManager.launchMain {
+                            showNotification("Chess Board Detected", uciMapping)
+                        }
+                    }
+                }
+            } finally {
+                // ✅ FIX: Ensure all bitmaps are recycled
+                try {
+                    pieces.forEach { it.recycle() }
+                    croppedBoard.recycle()
+                    fullBitmap.recycle()
+                    Log.d(TAG, "All bitmaps recycled successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error recycling bitmaps: ${e.message}")
+                }
             }
         }
     }
 
     private fun sendDataToBackend() {
-        serviceScope.launch {
+        CoroutineManager.launchIO {
             try {
                 // Get bottom color from SharedPreferences
                 val bottomColor = Prefs.getString(this@ScreenshotService, "bottom_color", "")
@@ -331,10 +332,14 @@ class ScreenshotService : Service() {
                             Log.d(TAG, "Verification - Read back from Prefs: $verification")
                         }
                         
-                        showNotification("Data Sent", "Board state sent to backend")
+                        CoroutineManager.launchMain {
+                            showNotification("Data Sent", "Board state sent to backend")
+                        }
                     } else {
                         Log.e(TAG, "Failed to send piece positions. Response: $positionResponse")
-                        showNotification("Error", "Failed to send board state")
+                        CoroutineManager.launchMain {
+                            showNotification("Error", "Failed to send board state")
+                        }
                     }
                 } else {
                     Log.w(TAG, "No piece positions available to send")
@@ -348,25 +353,27 @@ class ScreenshotService : Service() {
     }
 
     private fun showToast(message: String) {
-        handler.post {
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        CoroutineManager.launchMain {
+            Toast.makeText(this@ScreenshotService, message, Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun showNotification(title: String, message: String) {
-        try {
-            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle(title)
-                .setContentText(message)
-                .setSmallIcon(android.R.drawable.ic_menu_camera)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setAutoCancel(true)
-                .build()
+        CoroutineManager.launchMain {
+            try {
+                val notification = NotificationCompat.Builder(this@ScreenshotService, CHANNEL_ID)
+                    .setContentTitle(title)
+                    .setContentText(message)
+                    .setSmallIcon(android.R.drawable.ic_menu_camera)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .setAutoCancel(true)
+                    .build()
 
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.notify(System.currentTimeMillis().toInt(), notification)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error showing notification: ${e.message}")
+                val notificationManager = getSystemService(NotificationManager::class.java)
+                notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error showing notification: ${e.message}")
+            }
         }
     }
 
@@ -419,8 +426,8 @@ class ScreenshotService : Service() {
         mediaProjection?.stop()
         modelManager.close()
 
-        // Cancel coroutine scope
-        serviceScope.cancel()
+        // Cancel all coroutines
+        CoroutineManager.cancelAll()
 
         // Clear stored states
         storedOrientation = null
