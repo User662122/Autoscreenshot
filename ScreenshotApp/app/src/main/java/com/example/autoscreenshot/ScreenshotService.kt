@@ -55,7 +55,7 @@ class ScreenshotService : Service() {
 
         if (resultCode != Activity.RESULT_OK || data == null) {
             Log.e(TAG, "Invalid result code or data")
-            showToast("❌ Invalid permissions")
+            showToast("✗ Invalid permissions")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -113,7 +113,7 @@ class ScreenshotService : Service() {
             Log.d(TAG, "Screenshot capture will begin in 15 seconds")
         } catch (e: Exception) {
             Log.e(TAG, "Error starting screenshot service: ${e.message}")
-            showToast("❌ Error: ${e.message}")
+            showToast("✗ Error: ${e.message}")
             e.printStackTrace()
             stopSelf()
         }
@@ -154,7 +154,7 @@ class ScreenshotService : Service() {
             Log.d(TAG, "Virtual display setup completed")
         } catch (e: Exception) {
             Log.e(TAG, "Error setting up virtual display: ${e.message}")
-            showToast("❌ Display setup error")
+            showToast("✗ Display setup error")
             e.printStackTrace()
         }
     }
