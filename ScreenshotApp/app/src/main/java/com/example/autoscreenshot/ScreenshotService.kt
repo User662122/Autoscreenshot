@@ -20,6 +20,8 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
 
 class ScreenshotService : Service() {
     private var mediaProjection: MediaProjection? = null
