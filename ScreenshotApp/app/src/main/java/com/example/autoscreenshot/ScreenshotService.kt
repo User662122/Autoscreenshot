@@ -189,49 +189,48 @@ class ScreenshotService : Service() {
     }
 
     private fun save64Pieces(croppedBoard: Bitmap, fullBitmap: Bitmap) {
-        CoroutineManager.launchIO {
-            val cellW = croppedBoard.width / 8
-            val cellH = croppedBoard.height / 8
-            val pieces = mutableListOf<Bitmap>()
+    CoroutineManager.launchIO {
+        val cellW = croppedBoard.width / 8
+        val cellH = croppedBoard.height / 8
+        val pieces = mutableListOf<Bitmap>()
 
+        try {
+            for (r in 0 until 8) {
+                for (c in 0 until 8) {
+                    val x = c * cellW
+                    val y = r * cellH
+                    val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
+                    val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+                    pieces.add(resized)
+                    piece.recycle()
+                }
+            }
+
+            // Wait for classification to finish before recycling
+            val classificationJob = CompletableDeferred<Unit>()
+            modelManager.classifyChessBoardAsync(pieces, this@ScreenshotService, storedOrientation) { uciMapping, orientation ->
+                if (!hasStoredOrientation) {
+                    storedOrientation = orientation
+                    hasStoredOrientation = true
+                }
+                sendDataToBackend()
+                CoroutineManager.launchMain {
+                    showNotification("Chess Board Detected", uciMapping)
+                    classificationJob.complete(Unit)
+                }
+            }
+            classificationJob.await()  // <- wait until async callback finishes
+        } finally {
             try {
-                for (r in 0 until 8) {
-                    for (c in 0 until 8) {
-                        val x = c * cellW
-                        val y = r * cellH
-                        val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
-                        val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-                        pieces.add(resized)
-                        piece.recycle()
-                    }
-                }
-
-                CoroutineManager.launchDefault {
-                    modelManager.classifyChessBoardAsync(pieces, this@ScreenshotService, storedOrientation) { uciMapping, orientation ->
-                        if (!hasStoredOrientation) {
-                            storedOrientation = orientation
-                            hasStoredOrientation = true
-                            Log.d(TAG, "Board orientation stored: $orientation")
-                        }
-                        sendDataToBackend()
-                        CoroutineManager.launchMain {
-                            showNotification("Chess Board Detected", uciMapping)
-                        }
-                    }
-                }
-            } finally {
-                try {
-                    pieces.forEach { it.recycle() }
-                    croppedBoard.recycle()
-                    fullBitmap.recycle()
-                    Log.d(TAG, "All bitmaps recycled successfully")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error recycling bitmaps: ${e.message}")
-                }
+                pieces.forEach { it.recycle() }
+                croppedBoard.recycle()
+                fullBitmap.recycle()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error recycling bitmaps: ${e.message}")
             }
         }
     }
-
+}
     private fun sendDataToBackend() {
         CoroutineManager.launchIO {
             try {
