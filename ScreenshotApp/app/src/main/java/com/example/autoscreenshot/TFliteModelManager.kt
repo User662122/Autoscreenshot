@@ -4,24 +4,19 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import android.widget.Toast
+import kotlinx.coroutines.*
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import java.io.FileInputStream
-import java.util.concurrent.Executors
-import kotlinx.coroutines.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 class TFLiteModelManager(context: Context) {
     private var interpreters: Array<Interpreter?> = arrayOfNulls(8)
     private val MODEL_PATH = "wbe_mnv2_96.tflite"
-    private val executorService = Executors.newFixedThreadPool(8)
     
-    // ✅ FIX: Add coroutine scope for async operations
-    private val modelScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // ✅ FIX: Global CoroutineManager का उपयोग
     
     // Class names in the same order as your training
     private val classNames = arrayOf("White", "Black", "Empty")
@@ -83,34 +78,34 @@ class TFLiteModelManager(context: Context) {
     // ✅ FIX: New async version that doesn't block Main Thread
     suspend fun classifyChessBoardAsync(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
         if (interpreters[0] == null) {
-            withContext(Dispatchers.Main) {
+            CoroutineManager.launchMain {
                 Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
             }
             return
         }
 
         if (pieces.size != 64) {
-            withContext(Dispatchers.Main) {
+            CoroutineManager.launchMain {
                 Toast.makeText(context, "Need exactly 64 pieces for chess board", Toast.LENGTH_SHORT).show()
             }
             return
         }
 
         try {
-            // Perform classification in background
-            val result = withContext(Dispatchers.Default) {
+            // Perform classification in background using IO dispatcher
+            val result = withContext(Dispatchers.IO) {
                 classifyInBackground(pieces, context, storedOrientation)
             }
             
-            // Execute callback on Main Thread
-            withContext(Dispatchers.Main) {
+            // Execute callback on Main Thread using Global CoroutineManager
+            CoroutineManager.launchMain {
                 callback(result.first, result.second)
             }
 
         } catch (e: Exception) {
             Log.e("TFLiteModelManager", "Classification error: ${e.message}")
             e.printStackTrace()
-            withContext(Dispatchers.Main) {
+            CoroutineManager.launchMain {
                 Toast.makeText(context, "Classification error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -120,11 +115,10 @@ class TFLiteModelManager(context: Context) {
     private suspend fun classifyInBackground(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?): Pair<String, Boolean> {
         return withContext(Dispatchers.Default) {
             val classifications = Array(64) { "" }
-            val deferredResults = mutableListOf<Deferred<Unit>>()
-
-            // Process 8 pieces in parallel using coroutines
-            for (i in 0 until 64 step 8) {
-                val deferred = modelScope.async {
+            
+            // Process 8 pieces in parallel using coroutines - use IO dispatcher for parallel I/O
+            val deferredResults = (0 until 64 step 8).map { i ->
+                CoroutineManager.launchIO {
                     val interpreterIndex = (i / 8) % 8
                     val interpreter = interpreters[interpreterIndex]!!
 
@@ -134,11 +128,10 @@ class TFLiteModelManager(context: Context) {
                         Log.d("ParallelClassification", "Processed piece $j with interpreter $interpreterIndex")
                     }
                 }
-                deferredResults.add(deferred)
             }
 
-            // ✅ FIX: Use awaitAll instead of blocking get()
-            deferredResults.awaitAll()
+            // Wait for all coroutines to complete
+            deferredResults.forEach { it.join() }
 
             Log.d("ParallelClassification", "All 64 pieces processed in parallel")
 
@@ -166,7 +159,7 @@ class TFLiteModelManager(context: Context) {
     fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
         Log.w("TFLiteModelManager", "Using deprecated synchronous classifyChessBoard. Use classifyChessBoardAsync instead.")
         
-        modelScope.launch {
+        CoroutineManager.launchIO {
             classifyChessBoardAsync(pieces, context, storedOrientation, callback)
         }
     }
@@ -306,10 +299,10 @@ class TFLiteModelManager(context: Context) {
     }
 
     fun close() {
-        modelScope.cancel()
+        // Global CoroutineManager already handles cleanup
+        // We just need to close interpreters
         for (i in 0 until 8) {
             interpreters[i]?.close()
         }
-        executorService.shutdown()
     }
 }
