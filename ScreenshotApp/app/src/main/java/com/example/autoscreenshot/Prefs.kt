@@ -1,4 +1,3 @@
-// File: ScreenshotApp/app/src/main/java/com/example/autoscreenshot/Prefs.kt
 package com.example.autoscreenshot
 
 import android.content.Context
