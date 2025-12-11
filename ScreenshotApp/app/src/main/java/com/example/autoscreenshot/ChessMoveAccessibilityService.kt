@@ -91,17 +91,31 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                     val move = fetchMoveFromSharedPreferences()
                     if (move != null && move.isNotEmpty()) {
                         Log.d(TAG, "Found pending move: $move")
-                        executeMove(move)
                         
-                        // Clear the move after execution to prevent duplicate execution
-                        Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
-                        Log.d(TAG, "Cleared pending move after execution")
+                        // Mark that we're executing the move
+                        Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, true)
+                        
+                        // Execute the move
+                        val success = executeMove(move)
+                        
+                        if (success) {
+                            // Clear the move after successful execution
+                            Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
+                            Log.d(TAG, "Move executed successfully and cleared from SharedPreferences")
+                        } else {
+                            Log.e(TAG, "Move execution failed, will retry")
+                        }
+                        
+                        // Mark execution complete
+                        Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
                     }
+                    
                     // Poll every 2 seconds
                     delay(2000)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in polling loop: ${e.message}")
                     e.printStackTrace()
+                    Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
                     delay(5000) // Wait longer on error
                 }
             }
@@ -121,10 +135,10 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         return null
     }
     
-    private suspend fun executeMove(move: String) {
+    private suspend fun executeMove(move: String): Boolean {
         if (move.length < 4) {
             Log.e(TAG, "Invalid move: $move")
-            return
+            return false
         }
 
         try {
@@ -138,14 +152,14 @@ class ChessMoveAccessibilityService : AccessibilityService() {
 
             if (from == null || to == null) {
                 Log.e(TAG, "Coordinate conversion failed for $move")
-                return
+                return false
             }
 
             // First tap
             val tap1 = performTap(from.first, from.second)
             if (!tap1) {
                 Log.e(TAG, "FAILED: First tap could not be completed for $move")
-                return
+                return false
             }
 
             delay(300)
@@ -154,14 +168,16 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             val tap2 = performTap(to.first, to.second)
             if (!tap2) {
                 Log.e(TAG, "FAILED: Second tap could not be completed for $move")
-                return
+                return false
             }
 
             Log.d(TAG, "Move executed SUCCESSFULLY: $fromSquare → $toSquare")
+            return true
 
         } catch (e: Exception) {
             Log.e(TAG, "executeMove error: ${e.message}")
             e.printStackTrace()
+            return false
         }
     }
     
