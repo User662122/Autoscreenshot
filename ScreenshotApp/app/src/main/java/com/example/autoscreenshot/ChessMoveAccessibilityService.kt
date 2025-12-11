@@ -31,7 +31,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     }
     
     private val client = OkHttpClient()
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var isRunning = false
     private val TAG = "ChessMoveAccessibility"
     
@@ -62,7 +61,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     }
     
     private fun startPollingForMoves() {
-        serviceScope.launch {
+        CoroutineManager.launchIO {
             // Wait for /start to be called first
             while (isRunning) {
                 val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
@@ -123,48 +122,49 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     }
     
     private suspend fun executeMove(move: String) {
-    if (move.length < 4) {
-        Log.e(TAG, "Invalid move: $move")
-        return
+        if (move.length < 4) {
+            Log.e(TAG, "Invalid move: $move")
+            return
+        }
+
+        try {
+            val fromSquare = move.substring(0, 2)
+            val toSquare = move.substring(2, 4)
+
+            Log.d(TAG, "Executing move: $fromSquare → $toSquare")
+
+            val from = squareToScreenCoordinates(fromSquare)
+            val to = squareToScreenCoordinates(toSquare)
+
+            if (from == null || to == null) {
+                Log.e(TAG, "Coordinate conversion failed for $move")
+                return
+            }
+
+            // First tap
+            val tap1 = performTap(from.first, from.second)
+            if (!tap1) {
+                Log.e(TAG, "FAILED: First tap could not be completed for $move")
+                return
+            }
+
+            delay(300)
+
+            // Second tap
+            val tap2 = performTap(to.first, to.second)
+            if (!tap2) {
+                Log.e(TAG, "FAILED: Second tap could not be completed for $move")
+                return
+            }
+
+            Log.d(TAG, "Move executed SUCCESSFULLY: $fromSquare → $toSquare")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "executeMove error: ${e.message}")
+            e.printStackTrace()
+        }
     }
-
-    try {
-        val fromSquare = move.substring(0, 2)
-        val toSquare = move.substring(2, 4)
-
-        Log.d(TAG, "Executing move: $fromSquare → $toSquare")
-
-        val from = squareToScreenCoordinates(fromSquare)
-        val to = squareToScreenCoordinates(toSquare)
-
-        if (from == null || to == null) {
-            Log.e(TAG, "Coordinate conversion failed for $move")
-            return
-        }
-
-        // First tap
-        val tap1 = performTap(from.first, from.second)
-        if (!tap1) {
-            Log.e(TAG, "FAILED: First tap could not be completed for $move")
-            return
-        }
-
-        delay(300)
-
-        // Second tap
-        val tap2 = performTap(to.first, to.second)
-        if (!tap2) {
-            Log.e(TAG, "FAILED: Second tap could not be completed for $move")
-            return
-        }
-
-        Log.d(TAG, "Move executed SUCCESSFULLY: $fromSquare → $toSquare")
-
-    } catch (e: Exception) {
-        Log.e(TAG, "executeMove error: ${e.message}")
-        e.printStackTrace()
-    }
-}    
+    
     private fun squareToScreenCoordinates(square: String): Pair<Float, Float>? {
         if (square.length != 2) return null
         
@@ -197,55 +197,56 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     }
     
     private suspend fun performTap(x: Float, y: Float): Boolean = withContext(Dispatchers.Main) {
-    var attempt = 0
-    while (attempt < 3) {
-        attempt++
-        try {
-            val path = Path().apply {
-                moveTo(x, y)
+        var attempt = 0
+        while (attempt < 3) {
+            attempt++
+            try {
+                val path = Path().apply {
+                    moveTo(x, y)
+                }
+
+                val gestureBuilder = GestureDescription.Builder()
+                gestureBuilder.addStroke(
+                    GestureDescription.StrokeDescription(path, 0, 50)
+                )
+
+                val gesture = gestureBuilder.build()
+
+                val result = suspendCancellableCoroutine<Boolean> { continuation ->
+                    dispatchGesture(gesture, object : GestureResultCallback() {
+
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            Log.d(TAG, "Tap success at ($x,$y) | attempt $attempt")
+                            continuation.resume(true) {}
+                        }
+
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            Log.e(TAG, "Tap cancelled at ($x,$y) | attempt $attempt")
+                            continuation.resume(false) {}
+                        }
+
+                    }, null)
+                }
+
+                if (result) return@withContext true   // success → exit
+
+                Log.e(TAG, "Tap failed attempt $attempt at ($x,$y)")
+
+                delay(150) // retry delay
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Tap exception attempt $attempt: ${e.message}")
             }
-
-            val gestureBuilder = GestureDescription.Builder()
-            gestureBuilder.addStroke(
-                GestureDescription.StrokeDescription(path, 0, 50)
-            )
-
-            val gesture = gestureBuilder.build()
-
-            val result = suspendCancellableCoroutine<Boolean> { continuation ->
-                dispatchGesture(gesture, object : GestureResultCallback() {
-
-                    override fun onCompleted(gestureDescription: GestureDescription?) {
-                        Log.d(TAG, "Tap success at ($x,$y) | attempt $attempt")
-                        continuation.resume(true) {}
-                    }
-
-                    override fun onCancelled(gestureDescription: GestureDescription?) {
-                        Log.e(TAG, "Tap cancelled at ($x,$y) | attempt $attempt")
-                        continuation.resume(false) {}
-                    }
-
-                }, null)
-            }
-
-            if (result) return@withContext true   // success → exit
-
-            Log.e(TAG, "Tap failed attempt $attempt at ($x,$y)")
-
-            delay(150) // retry delay
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Tap exception attempt $attempt: ${e.message}")
         }
-    }
 
-    Log.e(TAG, "Tap failed permanently after 3 attempts at ($x,$y)")
-    return@withContext false
-}    
+        Log.e(TAG, "Tap failed permanently after 3 attempts at ($x,$y)")
+        return@withContext false
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
-        serviceScope.cancel()
+        CoroutineManager.cancelAll()
         Log.d(TAG, "Chess Move Accessibility Service Destroyed")
     }
 }
