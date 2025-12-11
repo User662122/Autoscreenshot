@@ -9,7 +9,9 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.*
 import okhttp3.*
-import java.io.IOException
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 class ChessMoveAccessibilityService : AccessibilityService() {
     
@@ -30,7 +32,12 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         }
     }
     
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+    
     private var isRunning = false
     private val TAG = "ChessMoveAccessibility"
     
@@ -75,7 +82,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                 delay(3000)
             }
             
-            // Now start polling SharedPreferences for moves
+            // Now start polling for AI moves directly from server
             while (isRunning) {
                 try {
                     // Check if screenshot service is still running
@@ -87,16 +94,17 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                         continue
                     }
                     
-                    // Read pending move from SharedPreferences (set by ScreenshotService)
-                    val move = fetchMoveFromSharedPreferences()
-                    if (move != null && move.isNotEmpty()) {
-                        Log.d(TAG, "Found pending move: $move")
+                    // Check if there's a pending move waiting to be executed
+                    val pendingMove = Prefs.getString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
+                    
+                    if (pendingMove.isNotEmpty()) {
+                        Log.d(TAG, "Found pending AI move: $pendingMove")
                         
                         // Mark that we're executing the move
                         Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, true)
                         
                         // Execute the move
-                        val success = executeMove(move)
+                        val success = executeMove(pendingMove)
                         
                         if (success) {
                             // Clear the move after successful execution
@@ -120,19 +128,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                 }
             }
         }
-    }
-    
-    private fun fetchMoveFromSharedPreferences(): String? {
-        // Read pending AI move from SharedPreferences (stored by ScreenshotService)
-        val pendingMove = Prefs.getString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
-        
-        if (pendingMove.isNotEmpty()) {
-            Log.d(TAG, "Found pending AI move in SharedPreferences: $pendingMove")
-            return pendingMove
-        }
-        
-        Log.d(TAG, "No pending move in SharedPreferences")
-        return null
     }
     
     private suspend fun executeMove(move: String): Boolean {
