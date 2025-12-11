@@ -1,9 +1,11 @@
 package com.example.autoscreenshot
 
+import android.app.NotificationManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
@@ -12,11 +14,9 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import java.io.FileInputStream
 
-class TFLiteModelManager(context: Context) {
+class TFLiteModelManager(private val context: Context) {
     private var interpreters: Array<Interpreter?> = arrayOfNulls(8)
     private val MODEL_PATH = "wbe_mnv2_96.tflite"
-    
-    // ✅ FIX: Global CoroutineManager का उपयोग
     
     // Class names in the same order as your training
     private val classNames = arrayOf("White", "Black", "Empty")
@@ -48,6 +48,10 @@ class TFLiteModelManager(context: Context) {
         "h8", "g8", "f8", "e8", "d8", "c8", "b8", "a8"
     )
 
+    private var storedOrientation: Boolean? = null
+    private var hasStoredOrientation = false
+    private var hasStartColorSent = false
+
     init {
         initializeModel(context)
     }
@@ -59,8 +63,9 @@ class TFLiteModelManager(context: Context) {
             for (i in 0 until 8) {
                 interpreters[i] = Interpreter(model)
             }
-            Log.d("TFLiteModelManager", "Initialized 8 interpreter instances")
+            Log.d(TAG, "Initialized 8 interpreter instances")
         } catch (e: Exception) {
+            Log.e(TAG, "Error initializing model: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -75,12 +80,16 @@ class TFLiteModelManager(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-    // ✅ FIX: New async version that doesn't block Main Thread
-    suspend fun classifyChessBoardAsync(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
+    /**
+     * Main entry point: receives 64 pieces from ScreenshotService
+     * and handles all processing from here
+     */
+    suspend fun processChessBoard(pieces: List<Bitmap>, context: Context) {
         if (interpreters[0] == null) {
             CoroutineManager.launchMain {
                 Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
             }
+            recycleBitmaps(pieces)
             return
         }
 
@@ -88,83 +97,72 @@ class TFLiteModelManager(context: Context) {
             CoroutineManager.launchMain {
                 Toast.makeText(context, "Need exactly 64 pieces for chess board", Toast.LENGTH_SHORT).show()
             }
+            recycleBitmaps(pieces)
             return
         }
 
         try {
-            // Perform classification in background using IO dispatcher
-            val result = withContext(Dispatchers.IO) {
-                classifyInBackground(pieces, context, storedOrientation)
-            }
+            // Step 1: Classify all 64 pieces
+            val classifications = classifyAllPieces(pieces)
             
-            // Execute callback on Main Thread using Global CoroutineManager
-            CoroutineManager.launchMain {
-                callback(result.first, result.second)
-            }
-
+            // Step 2: Detect or use stored orientation
+            val orientation = determineOrientation(classifications)
+            
+            // Step 3: Create UCI mapping and save to SharedPreferences
+            val uciMapping = createUCIResult(classifications, orientation)
+            
+            // Step 4: Send data to backend
+            sendDataToBackend(context)
+            
+            // Step 5: Show notification
+            showNotification(context, "Chess Board Detected", uciMapping)
+            
+            Log.d(TAG, "Chess board processing completed successfully")
+            
         } catch (e: Exception) {
-            Log.e("TFLiteModelManager", "Classification error: ${e.message}")
+            Log.e(TAG, "Error processing chess board: ${e.message}")
             e.printStackTrace()
             CoroutineManager.launchMain {
-                Toast.makeText(context, "Classification error: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Processing error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
+        } finally {
+            // Always recycle bitmaps to free memory
+            recycleBitmaps(pieces)
         }
     }
-    
-    // ✅ FIX: Background classification without blocking
-    private suspend fun classifyInBackground(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?): Pair<String, Boolean> {
+
+    /**
+     * Classify all 64 pieces in parallel using 8 interpreters
+     */
+    private suspend fun classifyAllPieces(pieces: List<Bitmap>): List<String> {
         return withContext(Dispatchers.Default) {
             val classifications = Array(64) { "" }
             
-            // Process 8 pieces in parallel using coroutines - use IO dispatcher for parallel I/O
+            // Process 8 pieces in parallel using coroutines
             val deferredResults = (0 until 64 step 8).map { i ->
-                CoroutineManager.launchIO {
+                async {
                     val interpreterIndex = (i / 8) % 8
                     val interpreter = interpreters[interpreterIndex]!!
 
                     for (j in i until minOf(i + 8, 64)) {
                         val classification = classifyBitmapWithInterpreter(pieces[j], interpreter)
                         classifications[j] = classification
-                        Log.d("ParallelClassification", "Processed piece $j with interpreter $interpreterIndex")
+                        Log.d(TAG, "Processed piece $j with interpreter $interpreterIndex: $classification")
                     }
                 }
             }
 
             // Wait for all coroutines to complete
-            deferredResults.forEach { it.join() }
+            deferredResults.awaitAll()
 
-            Log.d("ParallelClassification", "All 64 pieces processed in parallel")
-
-            val bottomColorPref = Prefs.getString(context, "bottom_color", "")
-            val isFirstDetection = bottomColorPref.isEmpty()
-            var detectedOrientation = storedOrientation
-
-            if (isFirstDetection && storedOrientation == null) {
-                val bottomColor = detectBottomColor(classifications.toList())
-                Prefs.setString(context, "bottom_color", bottomColor)
-                Prefs.setString(context, "board_orientation_detected", "true")
-                detectedOrientation = (bottomColor == "White")
-
-                Log.d("ChessOrientation", "First detection: $bottomColor pieces at bottom, orientation: ${if (detectedOrientation) "normal" else "reversed"}")
-            } else if (storedOrientation == null) {
-                detectedOrientation = detectOrientation(classifications.toList())
-            }
-
-            val uciMapping = createUCIResult(classifications.toList(), detectedOrientation ?: true, context)
-            Pair(uciMapping, detectedOrientation ?: true)
+            Log.d(TAG, "All 64 pieces classified")
+            classifications.toList()
         }
     }
 
-    // Keep old synchronous version for backward compatibility (but mark as deprecated)
-    fun classifyChessBoard(pieces: List<Bitmap>, context: Context, storedOrientation: Boolean?, callback: (String, Boolean) -> Unit) {
-        Log.w("TFLiteModelManager", "Using deprecated synchronous classifyChessBoard. Use classifyChessBoardAsync instead.")
-        
-        CoroutineManager.launchIO {
-            classifyChessBoardAsync(pieces, context, storedOrientation, callback)
-        }
-    }
-
-    // ✅ NEW: Classify bitmap with specific interpreter
+    /**
+     * Classify a single bitmap with a specific interpreter
+     */
     private fun classifyBitmapWithInterpreter(bitmap: Bitmap, interpreter: Interpreter): String {
         val input = preprocessBitmap(bitmap)
         val output = Array(1) { FloatArray(classNames.size) }
@@ -177,11 +175,36 @@ class TFLiteModelManager(context: Context) {
         return classNames[maxIndex]
     }
 
-    // ✅ NEW: Detect which color is at the bottom of the board
+    /**
+     * Determine board orientation (normal or reversed)
+     */
+    private fun determineOrientation(classifications: List<String>): Boolean {
+        val bottomColorPref = Prefs.getString(context, "bottom_color", "")
+        val isFirstDetection = bottomColorPref.isEmpty()
+
+        if (isFirstDetection && storedOrientation == null) {
+            // First detection: detect which color is at bottom
+            val bottomColor = detectBottomColor(classifications)
+            Prefs.setString(context, "bottom_color", bottomColor)
+            Prefs.setString(context, "board_orientation_detected", "true")
+            storedOrientation = (bottomColor == "White")
+            hasStoredOrientation = true
+
+            Log.d(TAG, "First detection: $bottomColor pieces at bottom, orientation: ${if (storedOrientation == true) "normal" else "reversed"}")
+        } else if (storedOrientation == null) {
+            // Use existing detection logic
+            storedOrientation = detectOrientation(classifications)
+            hasStoredOrientation = true
+        }
+
+        return storedOrientation ?: true
+    }
+
+    /**
+     * Detect which color is at the bottom of the board
+     */
     private fun detectBottomColor(classifications: List<String>): String {
-        // Check bottom two rows (rows 7 and 8 in normal chess notation)
-        // In our array indices: bottom rows are indices 48-63
-        
+        // Check bottom two rows (indices 48-63)
         var whiteCountBottom = 0
         var blackCountBottom = 0
         
@@ -195,7 +218,9 @@ class TFLiteModelManager(context: Context) {
         return if (whiteCountBottom >= blackCountBottom) "White" else "Black"
     }
 
-    // ✅ NEW: Default orientation detection (existing logic)
+    /**
+     * Default orientation detection
+     */
     private fun detectOrientation(classifications: List<String>): Boolean {
         var blackCountBottom = 0
         var whiteCountBottom = 0
@@ -209,6 +234,9 @@ class TFLiteModelManager(context: Context) {
         return blackCountBottom <= whiteCountBottom // true = normal, false = reversed
     }
 
+    /**
+     * Preprocess bitmap for TFLite model
+     */
     private fun preprocessBitmap(bitmap: Bitmap): ByteBuffer {
         val inputBuffer = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * CHANNEL_COUNT * 4)
         inputBuffer.order(ByteOrder.nativeOrder())
@@ -234,15 +262,18 @@ class TFLiteModelManager(context: Context) {
         return inputBuffer
     }
 
-    private fun createUCIResult(classifications: List<String>, orientation: Boolean, context: Context): String {
-        // Choose mapping based on the provided orientation
+    /**
+     * Create UCI format result and save to SharedPreferences
+     */
+    private fun createUCIResult(classifications: List<String>, orientation: Boolean): String {
+        // Choose mapping based on orientation
         val chessSquares = if (orientation) {
             chessSquaresNormal
         } else {
             chessSquaresReversed
         }
         
-        // Build FEN-like representation with CURRENT piece positions
+        // Build piece positions
         val whitePieces = mutableListOf<String>()
         val blackPieces = mutableListOf<String>()
         
@@ -250,11 +281,10 @@ class TFLiteModelManager(context: Context) {
             when (classifications[i]) {
                 "White" -> whitePieces.add(chessSquares[i])
                 "Black" -> blackPieces.add(chessSquares[i])
-                // Empty squares are not tracked
             }
         }
         
-        // ✅ FIX: Sort the pieces in alphabetical order
+        // Sort pieces alphabetically
         whitePieces.sort()
         blackPieces.sort()
         
@@ -263,7 +293,7 @@ class TFLiteModelManager(context: Context) {
         val blackUCI = blackPieces.joinToString(",")
         val mappingType = if (orientation) "normal" else "reversed"
         
-        // Save to SharedPreferences using Prefs utility
+        // Save to SharedPreferences
         Prefs.setString(context, "uci_white", whiteUCI)
         Prefs.setString(context, "uci_black", blackUCI)
         Prefs.setString(context, "uci_mapping", mappingType)
@@ -272,7 +302,7 @@ class TFLiteModelManager(context: Context) {
         val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
         Prefs.setString(context, "uci", combinedUCI)
         
-        // Create display message with CURRENT positions
+        // Create display message
         val message = buildString {
             append("White: ")
             append(whitePieces.joinToString(", "))
@@ -281,13 +311,100 @@ class TFLiteModelManager(context: Context) {
             append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
         }
         
-        // Also log for debugging
-        Log.d("ChessClassification", "White pieces at: ${whitePieces.joinToString(", ")}")
-        Log.d("ChessClassification", "Black pieces at: ${blackPieces.joinToString(", ")}")
-        Log.d("ChessClassification", "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
-        Log.d("ChessClassification", "Saved to Prefs - UCI: $combinedUCI")
+        Log.d(TAG, "White pieces at: ${whitePieces.joinToString(", ")}")
+        Log.d(TAG, "Black pieces at: ${blackPieces.joinToString(", ")}")
+        Log.d(TAG, "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
+        Log.d(TAG, "Saved to Prefs - UCI: $combinedUCI")
         
         return message
+    }
+
+    /**
+     * Send board state to backend server
+     */
+    private fun sendDataToBackend(context: Context) {
+        CoroutineManager.launchIO {
+            try {
+                // Send start color if not sent yet
+                val bottomColor = Prefs.getString(context, "bottom_color", "")
+                if (!hasStartColorSent && bottomColor.isNotEmpty()) {
+                    val colorLower = bottomColor.lowercase()
+                    val (startSuccess, startResponse) = NetworkManager.sendStartColor(context, colorLower)
+                    if (startSuccess) {
+                        hasStartColorSent = true
+                        Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
+                        if (startResponse.isNotEmpty() && startResponse != "Invalid" && startResponse != "Game Over") {
+                            Prefs.setString(context, "pending_ai_move", startResponse)
+                        }
+                    }
+                }
+
+                // Send piece positions
+                val whiteUCI = Prefs.getString(context, "uci_white", "")
+                val blackUCI = Prefs.getString(context, "uci_black", "")
+                if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
+                    val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    val (positionSuccess, positionResponse) = NetworkManager.sendPiecePositions(
+                        context,
+                        whitePositions,
+                        blackPositions
+                    )
+
+                    if (positionSuccess) {
+                        if (positionResponse.isNotEmpty() && positionResponse != "Invalid" && positionResponse != "Game Over") {
+                            Prefs.setString(context, "pending_ai_move", positionResponse)
+                        }
+                        Log.d(TAG, "Board state sent to backend successfully")
+                    } else {
+                        Log.e(TAG, "Failed to send board state to backend")
+                    }
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
+                e.printStackTrace()
+            }
+        }
+    }
+
+    /**
+     * Show notification to user
+     */
+    private fun showNotification(context: Context, title: String, message: String) {
+        CoroutineManager.launchMain {
+            try {
+                val notification = NotificationCompat.Builder(context, "screenshot_service_channel")
+                    .setContentTitle(title)
+                    .setContentText(message)
+                    .setSmallIcon(android.R.drawable.ic_menu_camera)
+                    .setPriority(NotificationCompat.PRIORITY_LOW)
+                    .setAutoCancel(true)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                    .build()
+
+                val notificationManager = context.getSystemService(NotificationManager::class.java)
+                notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error showing notification: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Recycle all bitmaps to free memory
+     */
+    private fun recycleBitmaps(pieces: List<Bitmap>) {
+        try {
+            pieces.forEach { 
+                if (!it.isRecycled) {
+                    it.recycle()
+                }
+            }
+            Log.d(TAG, "Recycled ${pieces.size} bitmaps")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error recycling bitmaps: ${e.message}")
+        }
     }
 
     fun getInterpreter(index: Int = 0): Interpreter? {
@@ -299,10 +416,21 @@ class TFLiteModelManager(context: Context) {
     }
 
     fun close() {
-        // Global CoroutineManager already handles cleanup
-        // We just need to close interpreters
+        // Reset state variables
+        storedOrientation = null
+        hasStoredOrientation = false
+        hasStartColorSent = false
+        
+        // Close all interpreters
         for (i in 0 until 8) {
             interpreters[i]?.close()
+            interpreters[i] = null
         }
+        
+        Log.d(TAG, "TFLiteModelManager closed")
+    }
+
+    companion object {
+        private const val TAG = "TFLiteModelManager"
     }
 }
