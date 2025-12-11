@@ -32,10 +32,6 @@ class ScreenshotService : Service() {
 
     private var captureJob: Job? = null
 
-    private var storedOrientation: Boolean? = null
-    private var hasStoredOrientation = false
-    private var hasStartColorSent = false
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -49,10 +45,7 @@ class ScreenshotService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "ScreenshotService starting")
 
-        storedOrientation = null
-        hasStoredOrientation = false
-        hasStartColorSent = false
-
+        // Reset all game data for fresh session
         Prefs.resetAllGameData(this)
         Log.d(TAG, "All game data reset for fresh session")
         Prefs.setString(this, "screenshot_service_active", "true")
@@ -153,7 +146,16 @@ class ScreenshotService : Service() {
                 val bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
                 if (bitmap != null) {
                     val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
-                    save64Pieces(cropped, bitmap)
+                    
+                    // Extract 64 pieces and pass to TFLiteModelManager
+                    val pieces = extract64Pieces(cropped)
+                    
+                    // Recycle bitmaps we no longer need
+                    cropped.recycle()
+                    bitmap.recycle()
+                    
+                    // Pass pieces to TFLiteModelManager for all further processing
+                    modelManager.processChessBoard(pieces, this@ScreenshotService)
                 }
             } finally {
                 image.close()
@@ -188,119 +190,28 @@ class ScreenshotService : Service() {
         return Bitmap.createBitmap(src, x1, y1, x2 - x1, y2 - y1)
     }
 
-    private fun save64Pieces(croppedBoard: Bitmap, fullBitmap: Bitmap) {
-    CoroutineManager.launchIO {
+    private fun extract64Pieces(croppedBoard: Bitmap): List<Bitmap> {
         val cellW = croppedBoard.width / 8
         val cellH = croppedBoard.height / 8
         val pieces = mutableListOf<Bitmap>()
 
-        try {
-            for (r in 0 until 8) {
-                for (c in 0 until 8) {
-                    val x = c * cellW
-                    val y = r * cellH
-                    val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
-                    val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
-                    pieces.add(resized)
-                    piece.recycle()
-                }
-            }
-
-            // Wait for classification to finish before recycling
-            val classificationJob = CompletableDeferred<Unit>()
-            modelManager.classifyChessBoardAsync(pieces, this@ScreenshotService, storedOrientation) { uciMapping, orientation ->
-                if (!hasStoredOrientation) {
-                    storedOrientation = orientation
-                    hasStoredOrientation = true
-                }
-                sendDataToBackend()
-                CoroutineManager.launchMain {
-                    showNotification("Chess Board Detected", uciMapping)
-                    classificationJob.complete(Unit)
-                }
-            }
-            classificationJob.await()  // <- wait until async callback finishes
-        } finally {
-            try {
-                pieces.forEach { it.recycle() }
-                croppedBoard.recycle()
-                fullBitmap.recycle()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error recycling bitmaps: ${e.message}")
+        for (r in 0 until 8) {
+            for (c in 0 until 8) {
+                val x = c * cellW
+                val y = r * cellH
+                val piece = Bitmap.createBitmap(croppedBoard, x, y, cellW, cellH)
+                val resized = Bitmap.createScaledBitmap(piece, 96, 96, true)
+                pieces.add(resized)
+                piece.recycle()
             }
         }
-    }
-}
-    private fun sendDataToBackend() {
-        CoroutineManager.launchIO {
-            try {
-                val bottomColor = Prefs.getString(this@ScreenshotService, "bottom_color", "")
-                if (!hasStartColorSent && bottomColor.isNotEmpty()) {
-                    val colorLower = bottomColor.lowercase()
-                    val (startSuccess, startResponse) = NetworkManager.sendStartColor(this@ScreenshotService, colorLower)
-                    if (startSuccess) {
-                        hasStartColorSent = true
-                        Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
-                        if (startResponse.isNotEmpty() && startResponse != "Invalid" && startResponse != "Game Over") {
-                            Prefs.setString(this@ScreenshotService, "pending_ai_move", startResponse)
-                        }
-                    }
-                }
 
-                val whiteUCI = Prefs.getString(this@ScreenshotService, "uci_white", "")
-                val blackUCI = Prefs.getString(this@ScreenshotService, "uci_black", "")
-                if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
-                    val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    val (positionSuccess, positionResponse) = NetworkManager.sendPiecePositions(
-                        this@ScreenshotService,
-                        whitePositions,
-                        blackPositions
-                    )
-
-                    if (positionSuccess) {
-                        if (positionResponse.isNotEmpty() && positionResponse != "Invalid" && positionResponse != "Game Over") {
-                            Prefs.setString(this@ScreenshotService, "pending_ai_move", positionResponse)
-                        }
-                        CoroutineManager.launchMain {
-                            showNotification("Data Sent", "Board state sent to backend")
-                        }
-                    } else {
-                        CoroutineManager.launchMain {
-                            showNotification("Error", "Failed to send board state")
-                        }
-                    }
-                }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
-                e.printStackTrace()
-            }
-        }
+        return pieces
     }
 
     private fun showToast(message: String) {
         CoroutineManager.launchMain {
             Toast.makeText(this@ScreenshotService, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun showNotification(title: String, message: String) {
-        CoroutineManager.launchMain {
-            try {
-                val notification = NotificationCompat.Builder(this@ScreenshotService, CHANNEL_ID)
-                    .setContentTitle(title)
-                    .setContentText(message)
-                    .setSmallIcon(android.R.drawable.ic_menu_camera)
-                    .setPriority(NotificationCompat.PRIORITY_LOW)
-                    .setAutoCancel(true)
-                    .build()
-
-                val notificationManager = getSystemService(NotificationManager::class.java)
-                notificationManager.notify(System.currentTimeMillis().toInt(), notification)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error showing notification: ${e.message}")
-            }
         }
     }
 
@@ -310,7 +221,10 @@ class ScreenshotService : Service() {
                 CHANNEL_ID,
                 "Screenshot Service",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Taking screenshots every 5 seconds"; setShowBadge(false) }
+            ).apply { 
+                description = "Taking screenshots every 3 seconds"
+                setShowBadge(false) 
+            }
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
         }
@@ -327,7 +241,7 @@ class ScreenshotService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Screenshot Service")
-            .setContentText("Taking screenshots every 5 seconds")
+            .setContentText("Taking screenshots every 3 seconds")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -348,10 +262,6 @@ class ScreenshotService : Service() {
         modelManager.close()
 
         CoroutineManager.cancelAll()
-
-        storedOrientation = null
-        hasStoredOrientation = false
-        hasStartColorSent = false
 
         Prefs.setString(this, "screenshot_service_active", "false")
 
