@@ -22,6 +22,7 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 
 class ScreenshotService : Service() {
+
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
@@ -43,8 +44,10 @@ class ScreenshotService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
         Prefs.resetAllGameData(this)
-        Prefs.setString(this, "screenshot_service_active", "true")
-ChessMoveAccessibilityService.restartPolling()
+
+        // Old service_active removed
+        // New polling start
+        ChessMoveAccessibilityService.instance?.startPollingForMoves()
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -75,16 +78,20 @@ ChessMoveAccessibilityService.restartPolling()
                 while (isActive && isCapturing) {
                     try {
                         val pendingMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
-                        
+
                         if (pendingMove.isNotEmpty()) {
                             while (isActive && isCapturing) {
-                                val currentMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
+                                val currentMove = Prefs.getString(
+                                    this@ScreenshotService,
+                                    "pending_ai_move",
+                                    ""
+                                )
                                 if (currentMove.isEmpty()) break
                                 delay(500)
                             }
                             delay(2000)
                         }
-                        
+
                         captureScreenshot()
                         delay(3000)
                     } catch (e: Exception) {
@@ -140,13 +147,15 @@ ChessMoveAccessibilityService.restartPolling()
             try {
                 val bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
                 if (bitmap != null) {
-                    val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
-                    
+                    val cropped = withContext(Dispatchers.Default) {
+                        cropBitmap(bitmap, 11, 505, 709, 1201)
+                    }
+
                     val pieces = extract64Pieces(cropped)
-                    
+
                     cropped.recycle()
                     bitmap.recycle()
-                    
+
                     modelManager.processChessBoard(pieces, this@ScreenshotService)
                 }
             } finally {
@@ -211,9 +220,9 @@ ChessMoveAccessibilityService.restartPolling()
                 CHANNEL_ID,
                 "Screenshot Service",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply { 
+            ).apply {
                 description = "Taking screenshots every 3 seconds"
-                setShowBadge(false) 
+                setShowBadge(false)
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
@@ -251,8 +260,6 @@ ChessMoveAccessibilityService.restartPolling()
         modelManager.close()
 
         CoroutineManager.cancelAll()
-
-        Prefs.setString(this, "screenshot_service_active", "false")
     }
 
     companion object {
