@@ -43,8 +43,8 @@ class ScreenshotService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
         Prefs.resetAllGameData(this)
-        ChessMoveAccessibilityService.signalServiceStart(this)
-        val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
+        ChessMoveAccessibilityService.restartPolling(this)
+       val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
 
         if (resultCode != Activity.RESULT_OK || data == null) {
