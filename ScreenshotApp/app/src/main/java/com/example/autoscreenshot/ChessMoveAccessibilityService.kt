@@ -52,6 +52,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         isRunning = true
+        showToast("🟢 Accessibility Service Connected")
         startPollingForMoves()
     }
     
@@ -61,17 +62,35 @@ class ChessMoveAccessibilityService : AccessibilityService() {
 
     private fun startPollingForMoves() {
         CoroutineManager.launchIO {
+            showToast("⏳ Waiting for board detection...")
+            
+            // Wait for bottom_color to be set and screenshot service to be active
+            var waitCounter = 0
             while (isRunning) {
                 val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
-                if (bottomColor.isNotEmpty()) break
+                val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
+                
+                if (bottomColor.isNotEmpty() && isServiceActive == "true") {
+                    showToast("✅ Board detected! Color: $bottomColor")
+                    break
+                }
+                
+                waitCounter++
+                if (waitCounter % 5 == 0) {
+                    showToast("⏳ Still waiting... (color: ${if(bottomColor.isEmpty()) "none" else bottomColor}, service: $isServiceActive)")
+                }
+                
                 delay(3000)
             }
+            
+            showToast("🚀 Starting move polling loop")
             
             while (isRunning) {
                 try {
                     val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
                     
                     if (isServiceActive != "true") {
+                        showToast("⏸️ Screenshot service not active")
                         delay(3000)
                         continue
                     }
@@ -79,24 +98,32 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                     val pendingMove = Prefs.getString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
                     
                     if (pendingMove.isNotEmpty()) {
+                        showToast("🎯 Executing move: $pendingMove")
                         Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, true)
                         val success = executeMove(pendingMove)
                         
                         if (success) {
+                            showToast("✅ Move executed: $pendingMove")
                             Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
+                        } else {
+                            showToast("❌ Move execution failed: $pendingMove")
                         }
                         
                         Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
                     } else {
+                        showToast("📡 Checking for AI move...")
                         fetchAndStoreAIMove()
                     }
                     
                     delay(2000)
                 } catch (e: Exception) {
+                    showToast("❌ Polling error: ${e.message}")
                     Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
                     delay(5000)
                 }
             }
+            
+            showToast("🛑 Polling stopped")
         }
     }
     
@@ -105,41 +132,72 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             val ngrokUrl = MainActivity.getNgrokUrl(this@ChessMoveAccessibilityService)
             val url = "$ngrokUrl/getmove"
             
+            showToast("📡 Fetching from backend...")
+            
             val request = Request.Builder().url(url).get().build()
             val response = client.newCall(request).execute()
             val body = response.body?.string()?.trim() ?: ""
             response.close()
             
+            showToast("📨 Backend response: '$body'")
+            
             if (body.isNotEmpty() && body != "None" && body != "Invalid" && body != "Game Over") {
                 Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", body)
-                showToast("AI: $body")
+                showToast("✅ AI Move: $body")
+            } else if (body == "None") {
+                showToast("⏸️ No move available yet")
+            } else if (body == "Invalid") {
+                showToast("⚠️ Invalid board state")
+            } else if (body == "Game Over") {
+                showToast("🏁 Game Over")
+            } else {
+                showToast("⚠️ Empty response from backend")
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            showToast("❌ Fetch error: ${e.message}")
+        }
     }
     
     private suspend fun executeMove(move: String): Boolean {
-        if (move.length < 4) return false
+        if (move.length < 4) {
+            showToast("❌ Invalid move format: $move")
+            return false
+        }
 
         try {
             val fromSquare = move.substring(0, 2)
             val toSquare = move.substring(2, 4)
 
+            showToast("🎯 Moving from $fromSquare to $toSquare")
+
             val from = squareToScreenCoordinates(fromSquare)
             val to = squareToScreenCoordinates(toSquare)
 
-            if (from == null || to == null) return false
+            if (from == null || to == null) {
+                showToast("❌ Invalid coordinates for move")
+                return false
+            }
 
+            showToast("👆 Tapping: ${fromSquare} (${from.first.toInt()}, ${from.second.toInt()})")
             val tap1 = performTap(from.first, from.second)
-            if (!tap1) return false
+            if (!tap1) {
+                showToast("❌ First tap failed")
+                return false
+            }
 
             delay(300)
 
+            showToast("👆 Tapping: ${toSquare} (${to.first.toInt()}, ${to.second.toInt()})")
             val tap2 = performTap(to.first, to.second)
-            if (!tap2) return false
+            if (!tap2) {
+                showToast("❌ Second tap failed")
+                return false
+            }
 
             return true
 
         } catch (e: Exception) {
+            showToast("❌ Execute error: ${e.message}")
             return false
         }
     }
@@ -193,7 +251,11 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                 if (result) return@withContext true
                 delay(150)
 
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                if (attempt == 3) {
+                    showToast("❌ Tap failed after 3 attempts")
+                }
+            }
         }
         return@withContext false
     }
@@ -207,6 +269,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        showToast("🔴 Accessibility Service Destroyed")
         CoroutineManager.cancelAll()
     }
 }
