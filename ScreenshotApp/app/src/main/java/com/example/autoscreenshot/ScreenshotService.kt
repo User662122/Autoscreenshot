@@ -18,6 +18,7 @@ import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 
 class ScreenshotService : Service() {
