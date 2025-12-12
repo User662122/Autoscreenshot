@@ -44,6 +44,7 @@ class ScreenshotService : Service() {
 
         Prefs.resetAllGameData(this)
         Prefs.setString(this, "screenshot_service_active", "true")
+ChessMoveAccessibilityService.restartPolling()
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
