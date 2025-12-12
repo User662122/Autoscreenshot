@@ -14,6 +14,8 @@ import java.util.concurrent.TimeUnit
 class ChessMoveAccessibilityService : AccessibilityService() {
     
     companion object {
+        private var instance: ChessMoveAccessibilityService? = null
+        
         fun isAccessibilityServiceEnabled(context: android.content.Context): Boolean {
             val service = "${context.packageName}/${ChessMoveAccessibilityService::class.java.name}"
             val enabledServices = Settings.Secure.getString(
@@ -28,6 +30,11 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
             context.startActivity(intent)
         }
+        
+        // Function to restart polling from outside
+        fun restartPolling() {
+            instance?.restartPollingInternal()
+        }
     }
     
     private val client = OkHttpClient.Builder()
@@ -37,6 +44,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         .build()
     
     private var isRunning = false
+    private var pollingJob: Job? = null
     private val TAG = "ChessMoveAccessibility"
     
     private val BOARD_LEFT = 11
@@ -51,6 +59,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         isRunning = true
         showToast("🟢 Accessibility Service Connected")
         startPollingForMoves()
@@ -60,13 +69,23 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     override fun onInterrupt() {}
 
+    private fun restartPollingInternal() {
+        showToast("🔄 Restarting polling...")
+        pollingJob?.cancel()
+        pollingJob = null
+        startPollingForMoves()
+    }
+
     private fun startPollingForMoves() {
-        CoroutineManager.launchIO {
+        // Cancel any existing polling job
+        pollingJob?.cancel()
+        
+        pollingJob = CoroutineManager.launchIO {
             showToast("⏳ Waiting for board detection...")
             
             // Wait for bottom_color to be set and screenshot service to be active
             var waitCounter = 0
-            while (isRunning) {
+            while (isRunning && isActive) {
                 val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
                 val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
                 
@@ -83,9 +102,14 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                 delay(3000)
             }
             
+            if (!isActive) {
+                showToast("⚠️ Polling cancelled during wait")
+                return@launchIO
+            }
+            
             showToast("🚀 Starting move polling loop")
             
-            while (isRunning) {
+            while (isRunning && isActive) {
                 try {
                     val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
                     
@@ -269,7 +293,8 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        pollingJob?.cancel()
+        instance = null
         showToast("🔴 Accessibility Service Destroyed")
-        CoroutineManager.cancelAll()
     }
 }
