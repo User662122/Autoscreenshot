@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -24,7 +23,6 @@ class TFLiteModelManager(private val context: Context) {
     private var interpreters: Array<Interpreter?> = arrayOfNulls(8)
     private val MODEL_PATH = "wbe_mnv2_96.tflite"
 
-    // HTTP Client for server communication
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -33,17 +31,14 @@ class TFLiteModelManager(private val context: Context) {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    // Class names in the same order as your training
     private val classNames = arrayOf("White", "Black", "Empty")
 
-    // Input image dimensions
     private val INPUT_SIZE = 96
     private val CHANNEL_COUNT = 3
 
-    // Chess board mapping arrays
     private val chessSquaresNormal = arrayOf(
         "a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8",
-        "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7", 
+        "a7", "b7", "c7", "d7", "e7", "f7", "g7", "h7",
         "a6", "b6", "c6", "d6", "e6", "f6", "g6", "h6",
         "a5", "b5", "c5", "d5", "e5", "f5", "g5", "h5",
         "a4", "b4", "c4", "d4", "e4", "f4", "g4", "h4",
@@ -77,11 +72,7 @@ class TFLiteModelManager(private val context: Context) {
             for (i in 0 until 8) {
                 interpreters[i] = Interpreter(model)
             }
-            Log.d(TAG, "Initialized 8 interpreter instances")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initializing model: ${e.message}")
-            e.printStackTrace()
-        }
+        } catch (_: Exception) { }
     }
 
     @Throws(Exception::class)
@@ -117,12 +108,9 @@ class TFLiteModelManager(private val context: Context) {
             val uciMapping = createUCIResult(classifications, orientation)
             sendDataToBackend(context)
             showNotification(context, "Chess Board Detected", uciMapping)
-            Log.d(TAG, "Chess board processing completed successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error processing chess board: ${e.message}")
-            e.printStackTrace()
+        } catch (_: Exception) {
             CoroutineManager.launchMain {
-                Toast.makeText(context, "Processing error: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Processing error", Toast.LENGTH_SHORT).show()
             }
         } finally {
             recycleBitmaps(pieces)
@@ -139,12 +127,10 @@ class TFLiteModelManager(private val context: Context) {
                     for (j in i until minOf(i + 8, 64)) {
                         val classification = classifyBitmapWithInterpreter(pieces[j], interpreter)
                         classifications[j] = classification
-                        Log.d(TAG, "Processed piece $j with interpreter $interpreterIndex: $classification")
                     }
                 }
             }
             deferredResults.awaitAll()
-            Log.d(TAG, "All 64 pieces classified")
             classifications.toList()
         }
     }
@@ -168,7 +154,6 @@ class TFLiteModelManager(private val context: Context) {
             Prefs.setString(context, "board_orientation_detected", "true")
             storedOrientation = (bottomColor == "White")
             hasStoredOrientation = true
-            Log.d(TAG, "First detection: $bottomColor pieces at bottom, orientation: ${if (storedOrientation == true) "normal" else "reversed"}")
         } else if (storedOrientation == null) {
             storedOrientation = detectOrientation(classifications)
             hasStoredOrientation = true
@@ -234,60 +219,44 @@ class TFLiteModelManager(private val context: Context) {
         blackPieces.sort()
         val whiteUCI = whitePieces.joinToString(",")
         val blackUCI = blackPieces.joinToString(",")
+
         val mappingType = if (orientation) "normal" else "reversed"
         Prefs.setString(context, "uci_white", whiteUCI)
         Prefs.setString(context, "uci_black", blackUCI)
         Prefs.setString(context, "uci_mapping", mappingType)
         val combinedUCI = "W:$whiteUCI|B:$blackUCI|M:$mappingType"
         Prefs.setString(context, "uci", combinedUCI)
-        val message = buildString {
+
+        return buildString {
             append("White: ")
             append(whitePieces.joinToString(", "))
             append("\nBlack: ")
             append(blackPieces.joinToString(", "))
             append("\nMapping: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"}")
         }
-        Log.d(TAG, "White pieces at: ${whitePieces.joinToString(", ")}")
-        Log.d(TAG, "Black pieces at: ${blackPieces.joinToString(", ")}")
-        Log.d(TAG, "Using: ${if (orientation) "Normal (a-h)" else "Reversed (h-a)"} mapping")
-        Log.d(TAG, "Saved to Prefs - UCI: $combinedUCI")
-        return message
     }
 
     private fun sendDataToBackend(context: Context) {
         CoroutineManager.launchIO {
             try {
                 val ngrokUrl = MainActivity.getNgrokUrl(context)
-
-                // Send /start endpoint with bottom color (only once)
                 val bottomColor = Prefs.getString(context, "bottom_color", "")
                 if (!hasStartColorSent && bottomColor.isNotEmpty()) {
                     val colorLower = bottomColor.lowercase()
-                    val (startSuccess, startResponse) = sendStartColor(ngrokUrl, colorLower)
+                    val (startSuccess, _) = sendStartColor(ngrokUrl, colorLower)
                     if (startSuccess) {
                         hasStartColorSent = true
-                        Log.d(TAG, "Start color sent: $colorLower. Response: $startResponse")
                     }
                 }
 
-                // Send /move endpoint with piece positions
                 val whiteUCI = Prefs.getString(context, "uci_white", "")
                 val blackUCI = Prefs.getString(context, "uci_black", "")
                 if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
                     val whitePositions = whiteUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                     val blackPositions = blackUCI.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    val (positionSuccess, _) = sendPiecePositions(ngrokUrl, whitePositions, blackPositions)
-                    if (positionSuccess) {
-                        Log.d(TAG, "Board state sent to backend successfully")
-                    }
+                    sendPiecePositions(ngrokUrl, whitePositions, blackPositions)
                 }
-
-                // Note: /getmove is now handled by ChessMoveAccessibilityService
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
-                e.printStackTrace()
-            }
+            } catch (_: Exception) { }
         }
     }
 
@@ -302,8 +271,7 @@ class TFLiteModelManager(private val context: Context) {
                 val success = response.isSuccessful
                 response.close()
                 Pair(success, bodyString)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending start color: ${e.message}")
+            } catch (_: Exception) {
                 Pair(false, "")
             }
         }
@@ -323,8 +291,7 @@ class TFLiteModelManager(private val context: Context) {
                 val success = response.isSuccessful
                 response.close()
                 Pair(success, bodyString)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending piece positions: ${e.message}")
+            } catch (_: Exception) {
                 Pair(false, "")
             }
         }
@@ -347,19 +314,14 @@ class TFLiteModelManager(private val context: Context) {
                     .build()
                 val notificationManager = context.getSystemService(NotificationManager::class.java)
                 notificationManager.notify(System.currentTimeMillis().toInt(), notification)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error showing notification: ${e.message}")
-            }
+            } catch (_: Exception) { }
         }
     }
 
     private fun recycleBitmaps(pieces: List<Bitmap>) {
         try {
             pieces.forEach { if (!it.isRecycled) it.recycle() }
-            Log.d(TAG, "Recycled ${pieces.size} bitmaps")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error recycling bitmaps: ${e.message}")
-        }
+        } catch (_: Exception) { }
     }
 
     fun getInterpreter(index: Int = 0): Interpreter? {
@@ -378,7 +340,6 @@ class TFLiteModelManager(private val context: Context) {
             interpreters[i]?.close()
             interpreters[i] = null
         }
-        Log.d(TAG, "TFLiteModelManager closed")
     }
 
     companion object {
