@@ -2,8 +2,11 @@ package com.example.autoscreenshot
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Context
 import android.content.Intent
 import android.graphics.Path
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
@@ -14,7 +17,8 @@ import java.util.concurrent.TimeUnit
 class ChessMoveAccessibilityService : AccessibilityService() {
     
     companion object {
-        private var instance: ChessMoveAccessibilityService? = null
+        private const val PREF_NAME = "accessibility_control"
+        private const val KEY_SHOULD_START = "should_start_polling"
         
         fun isAccessibilityServiceEnabled(context: android.content.Context): Boolean {
             val service = "${context.packageName}/${ChessMoveAccessibilityService::class.java.name}"
@@ -31,9 +35,22 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             context.startActivity(intent)
         }
         
-        // Function to restart polling from outside
+        // Function to trigger restart - sets flag that service monitors
         fun restartPolling() {
-            instance?.restartPollingInternal()
+            // This will be checked by the monitoring loop
+        }
+        
+        // Set flag to indicate service should start
+        fun signalServiceStart(context: Context) {
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putBoolean(KEY_SHOULD_START, true).apply()
+            prefs.edit().putLong("start_timestamp", System.currentTimeMillis()).apply()
+        }
+        
+        // Clear the start flag
+        fun signalServiceStop(context: Context) {
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putBoolean(KEY_SHOULD_START, false).apply()
         }
     }
     
@@ -45,6 +62,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     private var isRunning = false
     private var pollingJob: Job? = null
+    private var monitorJob: Job? = null
     private val TAG = "ChessMoveAccessibility"
     
     private val BOARD_LEFT = 11
@@ -57,17 +75,47 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private val CELL_WIDTH = BOARD_WIDTH / 8
     private val CELL_HEIGHT = BOARD_HEIGHT / 8
     
+    private var lastStartTimestamp = 0L
+    private val handler = Handler(Looper.getMainLooper())
+    
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
         isRunning = true
         showToast("🟢 Accessibility Service Connected")
-        startPollingForMoves()
+        
+        // Start monitoring for start signals
+        startMonitoringForStartSignal()
     }
     
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     
     override fun onInterrupt() {}
+    
+    private fun startMonitoringForStartSignal() {
+        monitorJob?.cancel()
+        
+        monitorJob = CoroutineManager.launchIO {
+            while (isActive && isRunning) {
+                try {
+                    val prefs = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                    val shouldStart = prefs.getBoolean(KEY_SHOULD_START, false)
+                    val timestamp = prefs.getLong("start_timestamp", 0L)
+                    
+                    // If flag is set and it's a new timestamp, start polling
+                    if (shouldStart && timestamp > lastStartTimestamp) {
+                        lastStartTimestamp = timestamp
+                        showToast("🚀 Received start signal - beginning polling")
+                        restartPollingInternal()
+                    }
+                    
+                    delay(1000) // Check every second
+                } catch (e: Exception) {
+                    showToast("❌ Monitor error: ${e.message}")
+                    delay(5000)
+                }
+            }
+        }
+    }
 
     private fun restartPollingInternal() {
         showToast("🔄 Restarting polling...")
@@ -279,7 +327,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     }
     
     private fun showToast(message: String) {
-        CoroutineManager.launchMain {
+        handler.post {
             Toast.makeText(this@ChessMoveAccessibilityService, message, Toast.LENGTH_SHORT).show()
         }
     }
@@ -288,7 +336,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         super.onDestroy()
         isRunning = false
         pollingJob?.cancel()
-        instance = null
+        monitorJob?.cancel()
         showToast("🔴 Accessibility Service Destroyed")
     }
 }
