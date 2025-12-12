@@ -62,6 +62,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         instance = this
         isRunning = true
         showToast("🟢 Accessibility Service Connected")
+        startPollingForMoves()
     }
     
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -82,7 +83,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         pollingJob = CoroutineManager.launchIO {
             showToast("⏳ Waiting 19 seconds for board detection...")
             
-            // Wait for 19 seconds
+            // Wait for 19 seconds first
             delay(19000)
             
             // Wait for bottom_color to be set
@@ -97,7 +98,7 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                 
                 waitCounter++
                 if (waitCounter % 5 == 0) {
-                    showToast("⏳ Still waiting for color detection... (color: ${if(bottomColor.isEmpty()) "none" else bottomColor})")
+                    showToast("⏳ Still waiting... (color: ${if(bottomColor.isEmpty()) "none" else bottomColor})")
                 }
                 
                 delay(3000)
