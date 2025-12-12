@@ -18,11 +18,9 @@ import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import android.widget.Toast
-import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 
 class ScreenshotService : Service() {
-
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
@@ -44,10 +42,7 @@ class ScreenshotService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
         Prefs.resetAllGameData(this)
-
-        // Old service_active removed
-        // New polling start
-        ChessMoveAccessibilityService.instance?.startPollingForMoves()
+        ChessMoveAccessibilityService.restartPolling()
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -74,24 +69,20 @@ class ScreenshotService : Service() {
             isCapturing = true
 
             captureJob = CoroutineManager.launchIO {
-                delay(15000)
+                delay(15000) // 19 second delay before starting
                 while (isActive && isCapturing) {
                     try {
                         val pendingMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
-
+                        
                         if (pendingMove.isNotEmpty()) {
                             while (isActive && isCapturing) {
-                                val currentMove = Prefs.getString(
-                                    this@ScreenshotService,
-                                    "pending_ai_move",
-                                    ""
-                                )
+                                val currentMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
                                 if (currentMove.isEmpty()) break
                                 delay(500)
                             }
                             delay(2000)
                         }
-
+                        
                         captureScreenshot()
                         delay(3000)
                     } catch (e: Exception) {
@@ -147,15 +138,13 @@ class ScreenshotService : Service() {
             try {
                 val bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
                 if (bitmap != null) {
-                    val cropped = withContext(Dispatchers.Default) {
-                        cropBitmap(bitmap, 11, 505, 709, 1201)
-                    }
-
+                    val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
+                    
                     val pieces = extract64Pieces(cropped)
-
+                    
                     cropped.recycle()
                     bitmap.recycle()
-
+                    
                     modelManager.processChessBoard(pieces, this@ScreenshotService)
                 }
             } finally {
@@ -220,9 +209,9 @@ class ScreenshotService : Service() {
                 CHANNEL_ID,
                 "Screenshot Service",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
+            ).apply { 
                 description = "Taking screenshots every 3 seconds"
-                setShowBadge(false)
+                setShowBadge(false) 
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
