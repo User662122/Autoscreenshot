@@ -259,6 +259,7 @@ class TFLiteModelManager(private val context: Context) {
             try {
                 val ngrokUrl = MainActivity.getNgrokUrl(context)
 
+                // Send /start endpoint with bottom color (only once)
                 val bottomColor = Prefs.getString(context, "bottom_color", "")
                 if (!hasStartColorSent && bottomColor.isNotEmpty()) {
                     val colorLower = bottomColor.lowercase()
@@ -269,6 +270,7 @@ class TFLiteModelManager(private val context: Context) {
                     }
                 }
 
+                // Send /move endpoint with piece positions
                 val whiteUCI = Prefs.getString(context, "uci_white", "")
                 val blackUCI = Prefs.getString(context, "uci_black", "")
                 if (whiteUCI.isNotEmpty() && blackUCI.isNotEmpty()) {
@@ -280,14 +282,7 @@ class TFLiteModelManager(private val context: Context) {
                     }
                 }
 
-                // ===== FIX: Only fetch AI move if NO pending move exists =====
-                val pendingMove = Prefs.getString(context, "pending_ai_move", "")
-                if (pendingMove.isEmpty()) {
-                    Log.d(TAG, "No pending move, fetching AI move from backend...")
-                    fetchAIMove(ngrokUrl)
-                } else {
-                    Log.d(TAG, "Pending move already exists ($pendingMove), skipping fetch")
-                }
+                // Note: /getmove is now handled by ChessMoveAccessibilityService
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error in sendDataToBackend: ${e.message}")
@@ -332,27 +327,6 @@ class TFLiteModelManager(private val context: Context) {
                 Log.e(TAG, "Error sending piece positions: ${e.message}")
                 Pair(false, "")
             }
-        }
-    }
-
-    private suspend fun fetchAIMove(ngrokUrl: String) {
-        try {
-            val url = "$ngrokUrl/getmove"
-            val request = Request.Builder().url(url).get().build()
-            val response = client.newCall(request).execute()
-            val body = response.body?.string()?.trim() ?: ""
-            response.close()
-            
-            if (body.isNotEmpty() && body != "None" && body != "Invalid" && body != "Game Over") {
-                // Only store if it's a valid move
-                Prefs.setString(context, "pending_ai_move", body)
-                Log.d(TAG, "AI move fetched and stored: $body")
-                showToast("AI: $body")
-            } else {
-                Log.d(TAG, "No valid AI move available from backend")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchAIMove error: ${e.message}")
         }
     }
 
