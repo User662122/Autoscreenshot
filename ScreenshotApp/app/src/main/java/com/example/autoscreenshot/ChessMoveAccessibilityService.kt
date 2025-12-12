@@ -5,7 +5,6 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.provider.Settings
-import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 import kotlinx.coroutines.*
@@ -40,7 +39,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private var isRunning = false
     private val TAG = "ChessMoveAccessibility"
     
-    // Chess board coordinates (based on your crop: x1=11, y1=505, x2=709, y2=1201)
     private val BOARD_LEFT = 11
     private val BOARD_TOP = 505
     private val BOARD_RIGHT = 709
@@ -53,81 +51,50 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.d(TAG, "Chess Move Accessibility Service Connected")
         isRunning = true
         startPollingForMoves()
     }
     
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Not needed for our use case
-    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     
-    override fun onInterrupt() {
-        Log.d(TAG, "Service interrupted")
-    }
-    
+    override fun onInterrupt() {}
+
     private fun startPollingForMoves() {
         CoroutineManager.launchIO {
-            // Wait for /start to be called first
             while (isRunning) {
                 val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
-                
-                if (bottomColor.isNotEmpty()) {
-                    Log.d(TAG, "Start color detected: $bottomColor. Beginning move polling...")
-                    break
-                }
-                
-                Log.d(TAG, "Waiting for /start to be called...")
+                if (bottomColor.isNotEmpty()) break
                 delay(3000)
             }
             
-            // Now start polling for AI moves directly from server
             while (isRunning) {
                 try {
-                    // Check if screenshot service is still running
                     val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
                     
                     if (isServiceActive != "true") {
-                        Log.d(TAG, "Screenshot service stopped. Pausing move polling...")
                         delay(3000)
                         continue
                     }
                     
-                    // Check if there's a pending move waiting to be executed
                     val pendingMove = Prefs.getString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
                     
                     if (pendingMove.isNotEmpty()) {
-                        Log.d(TAG, "Found pending AI move: $pendingMove")
-                        
-                        // Mark that we're executing the move
                         Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, true)
-                        
-                        // Execute the move
                         val success = executeMove(pendingMove)
                         
                         if (success) {
-                            // Clear the move after successful execution
                             Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
-                            Log.d(TAG, "Move executed successfully and cleared from SharedPreferences")
-                        } else {
-                            Log.e(TAG, "Move execution failed, will retry")
                         }
                         
-                        // Mark execution complete
                         Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
                     } else {
-                        // No pending move - fetch new move from backend
-                        Log.d(TAG, "No pending move, fetching from backend...")
                         fetchAndStoreAIMove()
                     }
                     
-                    // Poll every 2 seconds
                     delay(2000)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error in polling loop: ${e.message}")
-                    e.printStackTrace()
                     Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
-                    delay(5000) // Wait longer on error
+                    delay(5000)
                 }
             }
         }
@@ -144,61 +111,35 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             response.close()
             
             if (body.isNotEmpty() && body != "None" && body != "Invalid" && body != "Game Over") {
-                // Only store if it's a valid move
                 Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", body)
-                Log.d(TAG, "AI move fetched and stored: $body")
                 showToast("AI: $body")
-            } else {
-                Log.d(TAG, "No valid AI move available from backend (received: $body)")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "fetchAndStoreAIMove error: ${e.message}")
-            e.printStackTrace()
-        }
+        } catch (e: Exception) {}
     }
     
     private suspend fun executeMove(move: String): Boolean {
-        if (move.length < 4) {
-            Log.e(TAG, "Invalid move: $move")
-            return false
-        }
+        if (move.length < 4) return false
 
         try {
             val fromSquare = move.substring(0, 2)
             val toSquare = move.substring(2, 4)
 
-            Log.d(TAG, "Executing move: $fromSquare → $toSquare")
-
             val from = squareToScreenCoordinates(fromSquare)
             val to = squareToScreenCoordinates(toSquare)
 
-            if (from == null || to == null) {
-                Log.e(TAG, "Coordinate conversion failed for $move")
-                return false
-            }
+            if (from == null || to == null) return false
 
-            // First tap
             val tap1 = performTap(from.first, from.second)
-            if (!tap1) {
-                Log.e(TAG, "FAILED: First tap could not be completed for $move")
-                return false
-            }
+            if (!tap1) return false
 
             delay(300)
 
-            // Second tap
             val tap2 = performTap(to.first, to.second)
-            if (!tap2) {
-                Log.e(TAG, "FAILED: Second tap could not be completed for $move")
-                return false
-            }
+            if (!tap2) return false
 
-            Log.d(TAG, "Move executed SUCCESSFULLY: $fromSquare → $toSquare")
             return true
 
         } catch (e: Exception) {
-            Log.e(TAG, "executeMove error: ${e.message}")
-            e.printStackTrace()
             return false
         }
     }
@@ -206,30 +147,24 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private fun squareToScreenCoordinates(square: String): Pair<Float, Float>? {
         if (square.length != 2) return null
         
-        val file = square[0] // a-h
-        val rank = square[1] // 1-8
+        val file = square[0]
+        val rank = square[1]
         
-        // Check orientation from SharedPreferences
         val bottomColor = Prefs.getString(this, "bottom_color", "White")
         
         val col: Int
         val row: Int
         
         if (bottomColor == "White") {
-            // Normal orientation: a-h left to right, 1-8 bottom to top
-            col = file - 'a' // 0-7
-            row = 7 - (rank - '1') // 0-7 (inverted)
+            col = file - 'a'
+            row = 7 - (rank - '1')
         } else {
-            // Reversed orientation: h-a left to right, 8-1 bottom to top
-            col = 'h' - file // 0-7
-            row = rank - '1' // 0-7
+            col = 'h' - file
+            row = rank - '1'
         }
         
-        // Calculate center of the square
         val x = BOARD_LEFT + (col * CELL_WIDTH) + (CELL_WIDTH / 2)
         val y = BOARD_TOP + (row * CELL_HEIGHT) + (CELL_HEIGHT / 2)
-        
-        Log.d(TAG, "Square $square -> Screen coordinates ($x, $y)")
         
         return Pair(x.toFloat(), y.toFloat())
     }
@@ -239,45 +174,27 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         while (attempt < 3) {
             attempt++
             try {
-                val path = Path().apply {
-                    moveTo(x, y)
-                }
-
+                val path = Path().apply { moveTo(x, y) }
                 val gestureBuilder = GestureDescription.Builder()
-                gestureBuilder.addStroke(
-                    GestureDescription.StrokeDescription(path, 0, 50)
-                )
-
+                gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 50))
                 val gesture = gestureBuilder.build()
 
                 val result = suspendCancellableCoroutine<Boolean> { continuation ->
                     dispatchGesture(gesture, object : GestureResultCallback() {
-
                         override fun onCompleted(gestureDescription: GestureDescription?) {
-                            Log.d(TAG, "Tap success at ($x,$y) | attempt $attempt")
                             continuation.resume(true) {}
                         }
-
                         override fun onCancelled(gestureDescription: GestureDescription?) {
-                            Log.e(TAG, "Tap cancelled at ($x,$y) | attempt $attempt")
                             continuation.resume(false) {}
                         }
-
                     }, null)
                 }
 
-                if (result) return@withContext true   // success → exit
+                if (result) return@withContext true
+                delay(150)
 
-                Log.e(TAG, "Tap failed attempt $attempt at ($x,$y)")
-
-                delay(150) // retry delay
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Tap exception attempt $attempt: ${e.message}")
-            }
+            } catch (e: Exception) {}
         }
-
-        Log.e(TAG, "Tap failed permanently after 3 attempts at ($x,$y)")
         return@withContext false
     }
     
@@ -291,6 +208,5 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         super.onDestroy()
         isRunning = false
         CoroutineManager.cancelAll()
-        Log.d(TAG, "Chess Move Accessibility Service Destroyed")
     }
 }
