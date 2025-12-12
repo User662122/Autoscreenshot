@@ -7,10 +7,9 @@ import android.graphics.Path
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.widget.Toast
 import kotlinx.coroutines.*
 import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 class ChessMoveAccessibilityService : AccessibilityService() {
@@ -116,6 +115,10 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                         
                         // Mark execution complete
                         Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
+                    } else {
+                        // No pending move - fetch new move from backend
+                        Log.d(TAG, "No pending move, fetching from backend...")
+                        fetchAndStoreAIMove()
                     }
                     
                     // Poll every 2 seconds
@@ -127,6 +130,30 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                     delay(5000) // Wait longer on error
                 }
             }
+        }
+    }
+    
+    private suspend fun fetchAndStoreAIMove() {
+        try {
+            val ngrokUrl = MainActivity.getNgrokUrl(this@ChessMoveAccessibilityService)
+            val url = "$ngrokUrl/getmove"
+            
+            val request = Request.Builder().url(url).get().build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string()?.trim() ?: ""
+            response.close()
+            
+            if (body.isNotEmpty() && body != "None" && body != "Invalid" && body != "Game Over") {
+                // Only store if it's a valid move
+                Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", body)
+                Log.d(TAG, "AI move fetched and stored: $body")
+                showToast("AI: $body")
+            } else {
+                Log.d(TAG, "No valid AI move available from backend (received: $body)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchAndStoreAIMove error: ${e.message}")
+            e.printStackTrace()
         }
     }
     
@@ -252,6 +279,12 @@ class ChessMoveAccessibilityService : AccessibilityService() {
 
         Log.e(TAG, "Tap failed permanently after 3 attempts at ($x,$y)")
         return@withContext false
+    }
+    
+    private fun showToast(message: String) {
+        CoroutineManager.launchMain {
+            Toast.makeText(this@ChessMoveAccessibilityService, message, Toast.LENGTH_SHORT).show()
+        }
     }
     
     override fun onDestroy() {
