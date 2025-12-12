@@ -16,7 +16,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
-import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -39,22 +38,17 @@ class ScreenshotService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
         modelManager = TFLiteModelManager(this)
-        Log.d(TAG, "ScreenshotService created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "ScreenshotService starting")
 
-        // Reset all game data for fresh session
         Prefs.resetAllGameData(this)
-        Log.d(TAG, "All game data reset for fresh session")
         Prefs.setString(this, "screenshot_service_active", "true")
 
         val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
         val data = intent?.getParcelableExtra<Intent>("data")
 
         if (resultCode != Activity.RESULT_OK || data == null) {
-            Log.e(TAG, "Invalid result code or data")
             showToast("✗ Invalid permissions")
             stopSelf()
             return START_NOT_STICKY
@@ -68,7 +62,6 @@ class ScreenshotService : Service() {
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
                     super.onStop()
-                    Log.d(TAG, "MediaProjection stopped")
                     stopSelf()
                 }
             }, handler)
@@ -77,44 +70,30 @@ class ScreenshotService : Service() {
             isCapturing = true
 
             captureJob = CoroutineManager.launchIO {
-                delay(15000) // Initial 15-second delay
+                delay(15000)
                 while (isActive && isCapturing) {
                     try {
-                        // Check if there's a pending AI move that hasn't been executed yet
                         val pendingMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
                         
                         if (pendingMove.isNotEmpty()) {
-                            Log.d(TAG, "Pausing screenshot service - waiting for AI move execution: $pendingMove")
-                            
-                            // Wait until the move is executed (ChessMoveAccessibilityService clears it)
                             while (isActive && isCapturing) {
                                 val currentMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
-                                if (currentMove.isEmpty()) {
-                                    Log.d(TAG, "AI move executed, resuming screenshot service")
-                                    break
-                                }
-                                delay(500) // Check every 500ms
+                                if (currentMove.isEmpty()) break
+                                delay(500)
                             }
-                            
-                            // Add a small delay after move execution before taking next screenshot
                             delay(2000)
                         }
                         
                         captureScreenshot()
-                        delay(3000) // Wait 3 seconds between captures
+                        delay(3000)
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error in capture loop: ${e.message}")
-                        e.printStackTrace()
                         delay(5000)
                     }
                 }
             }
 
-            Log.d(TAG, "Screenshot capture will begin in 15 seconds")
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting screenshot service: ${e.message}")
             showToast("✗ Error: ${e.message}")
-            e.printStackTrace()
             stopSelf()
         }
 
@@ -136,8 +115,6 @@ class ScreenshotService : Service() {
             val height = metrics.heightPixels
             val density = metrics.densityDpi
 
-            Log.d(TAG, "Display metrics: $width x $height, density: $density")
-
             imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
 
             virtualDisplay = mediaProjection?.createVirtualDisplay(
@@ -151,11 +128,8 @@ class ScreenshotService : Service() {
                 null
             )
 
-            Log.d(TAG, "Virtual display setup completed")
         } catch (e: Exception) {
-            Log.e(TAG, "Error setting up virtual display: ${e.message}")
             showToast("✗ Display setup error")
-            e.printStackTrace()
         }
     }
 
@@ -167,14 +141,11 @@ class ScreenshotService : Service() {
                 if (bitmap != null) {
                     val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
                     
-                    // Extract 64 pieces and pass to TFLiteModelManager
                     val pieces = extract64Pieces(cropped)
                     
-                    // Recycle bitmaps we no longer need
                     cropped.recycle()
                     bitmap.recycle()
                     
-                    // Pass pieces to TFLiteModelManager for all further processing
                     modelManager.processChessBoard(pieces, this@ScreenshotService)
                 }
             } finally {
@@ -200,8 +171,6 @@ class ScreenshotService : Service() {
 
             Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
         } catch (e: Exception) {
-            Log.e(TAG, "Error converting image to bitmap: ${e.message}")
-            e.printStackTrace()
             null
         }
     }
@@ -271,7 +240,6 @@ class ScreenshotService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "ScreenshotService destroying")
 
         isCapturing = false
         captureJob?.cancel()
@@ -284,8 +252,6 @@ class ScreenshotService : Service() {
         CoroutineManager.cancelAll()
 
         Prefs.setString(this, "screenshot_service_active", "false")
-
-        Log.d(TAG, "ScreenshotService destroyed")
     }
 
     companion object {
