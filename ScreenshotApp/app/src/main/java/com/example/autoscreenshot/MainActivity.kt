@@ -83,11 +83,21 @@ class MainActivity : AppCompatActivity() {
         }
         
         binding.stopButton.setOnClickListener {
+            // 1. सभी कोरोटीन को कैंसल करें
+            CoroutineManager.cancelAll()
+            
+            // 2. सभी गेम डेटा को रीसेट करें
+            Prefs.resetAllGameData(this)
+            
+            // 3. Screenshot सर्विस को स्टॉप करें
             stopService(Intent(this, ScreenshotService::class.java))
+            
+            // 4. स्टेटस अपडेट करें
             binding.statusText.text = "Screenshot service stopped"
             binding.startButton.isEnabled = true
             binding.stopButton.isEnabled = false
-            Toast.makeText(this, "Screenshot service stopped", Toast.LENGTH_SHORT).show()
+            
+            Toast.makeText(this, "All coroutines cancelled and game data reset", Toast.LENGTH_SHORT).show()
         }
         
         // Set Ngrok URL button
