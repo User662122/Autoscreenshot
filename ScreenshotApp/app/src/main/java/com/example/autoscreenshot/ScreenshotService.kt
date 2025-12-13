@@ -159,7 +159,7 @@ private suspend fun captureScreenshot() {
                     bitmap
                 }
 
-                val cropped = withContext(Dispatchers.Default) { cropBitmap(resizedBitmap, 11, 505, 709, 1201) }
+                val cropped = withContext(Dispatchers.Default) { cropBitmap(resizedBitmap, 11, 436, 709, 1141) }
                 Log.w(TAG, "Screenshot cropped successfully")
 
                 val pieces = extract64Pieces(cropped)
