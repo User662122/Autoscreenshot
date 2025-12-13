@@ -64,9 +64,9 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private val TAG = "ChessMoveAccessibility"
     
     private val BOARD_LEFT = 18
-    private val BOARD_TOP = 649
-    private val BOARD_RIGHT = 1063
-    private val BOARD_BOTTOM = 1696
+    private val BOARD_TOP = 765
+    private val BOARD_RIGHT = 1064
+    private val BOARD_BOTTOM = 1812
     
     private val BOARD_WIDTH = BOARD_RIGHT - BOARD_LEFT
     private val BOARD_HEIGHT = BOARD_BOTTOM - BOARD_TOP
