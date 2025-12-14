@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen Stream Viewer</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        .status.waiting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            aspect-ratio: 9 / 19.5;
+            max-height: 80vh;
+            margin: 0 auto;
+        }
+        
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        button.primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        button.primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+        
+        button.danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        button.danger:hover {
+            background: #c82333;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .info p {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 Screen Stream Viewer</h1>
+        
+        <div id="status" class="status waiting">
+            Waiting for stream...
+        </div>
+        
+        <div class="video-container">
+            <video id="remoteVideo" autoplay playsinline muted></video>
+        </div>
+        
+        <div class="controls">
+            <button id="connectBtn" class="primary">Connect</button>
+            <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+        </div>
+        
+        <div class="info">
+            <p><strong>Instructions:</strong></p>
+            <p>1. Start screen streaming on your Android device</p>
+            <p>2. Click "Connect" button above</p>
+            <p>3. The stream will appear automatically</p>
+            <p id="streamInfo"></p>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let peerConnection = null;
+        const remoteVideo = document.getElementById('remoteVideo');
+        const status = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const streamInfo = document.getElementById('streamInfo');
+        
+        const config = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+        
+        function updateStatus(message, type = 'waiting') {
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+        
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(config);
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex,
+                        candidate: event.candidate.candidate
+                    });
+                    console.log('ICE candidate sent');
+                }
+            };
+            
+            peerConnection.ontrack = (event) => {
+                console.log('Remote track received:', event.track.kind);
+                remoteVideo.srcObject = event.streams[0];
+                updateStatus('✓ Stream connected!', 'connected');
+                
+                const stream = event.streams[0];
+                const videoTrack = stream.getVideoTracks()[0];
+                if (videoTrack) {
+                    const settings = videoTrack.getSettings();
+                    streamInfo.innerHTML = `<strong>Stream:</strong> ${settings.width}x${settings.height} @ ${settings.frameRate}fps`;
+                }
+            };
+            
+            peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'failed') {
+                    updateStatus('Connection failed. Please try again.', 'error');
+                }
+            };
+        }
+        
+        socket.on('connect', () => {
+            console.log('Connected to signaling server');
+            updateStatus('Connected to server. Waiting for stream...', 'waiting');
+        });
+        
+        socket.on('offer', async (data) => {
+            console.log('Received offer');
+            updateStatus('Stream found! Connecting...', 'waiting');
+            
+            createPeerConnection();
+            
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({
+                type: 'offer',
+                sdp: data.sdp
+            }));
+            
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            socket.emit('answer', {
+                type: 'answer',
+                sdp: answer.sdp,
+                to: data.from
+            });
+            
+            console.log('Answer sent');
+        });
+        
+        socket.on('ice-candidate', async (data) => {
+            if (peerConnection) {
+                await peerConnection.addIceCandidate(new RTCIceCandidate({
+                    sdpMid: data.sdpMid,
+                    sdpMLineIndex: data.sdpMLineIndex,
+                    candidate: data.candidate
+                }));
+                console.log('ICE candidate added');
+            }
+        });
+        
+        connectBtn.onclick = () => {
+            updateStatus('Waiting for stream from Android device...', 'waiting');
+            connectBtn.disabled = true;
+            disconnectBtn.disabled = false;
+        };
+        
+        disconnectBtn.onclick = () => {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            updateStatus('Disconnected', 'waiting');
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            streamInfo.innerHTML = '';
+        };
+        
+        socket.on('disconnect', () => {
+            updateStatus('Disconnected from server', 'error');
+        });
+    </script>
+</body>
+</html>
