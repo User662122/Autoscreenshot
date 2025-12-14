@@ -6,112 +6,74 @@
     android:padding="16dp"
     android:gravity="center">
 
-    <!-- Ngrok URL Configuration Section -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Ngrok URL Configuration"
-        android:textSize="18sp"
+        android:text="Real-Time Screen Streaming"
+        android:textSize="24sp"
         android:textStyle="bold"
         android:gravity="center"
         android:layout_marginBottom="16dp" />
 
-    <EditText
-        android:id="@+id/urlEditText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Enter Ngrok URL (e.g., https://abc123.ngrok.io)"
-        android:inputType="textUri"
-        android:layout_marginBottom="8dp" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginBottom="16dp">
-
-        <Button
-            android:id="@+id/setUrlButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Set URL"
-            android:layout_marginEnd="8dp" />
-
-        <Button
-            android:id="@+id/clearUrlButton"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Clear"
-            android:layout_marginStart="8dp" />
-
-    </LinearLayout>
-
     <TextView
-        android:id="@+id/currentUrlText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Current URL: Not Set"
+        android:text="Stream your screen via WebRTC with H.264 encoding"
         android:textSize="14sp"
         android:gravity="center"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="32dp" />
 
-    <!-- Accessibility Service Section -->
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Auto Chess Move Player"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:gravity="center"
-        android:layout_marginBottom="8dp" />
-
-    <TextView
-        android:id="@+id/accessibilityStatusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Accessibility Service: Disabled"
-        android:textSize="14sp"
-        android:gravity="center"
-        android:layout_marginBottom="8dp" />
-
-    <Button
-        android:id="@+id/enableAccessibilityButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Enable Accessibility Service"
-        android:layout_marginBottom="24dp" />
-
-    <!-- Existing Screenshot Controls -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Screenshot service not running"
+        android:text="Screen streaming not active"
         android:textSize="18sp"
+        android:textColor="#FF5722"
         android:layout_marginBottom="24dp"/>
 
     <Button
         android:id="@+id/startButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Start Screenshot Service"
+        android:text="Start Screen Streaming"
+        android:textSize="16sp"
+        android:padding="16dp"
         android:layout_marginBottom="16dp"/>
 
     <Button
         android:id="@+id/stopButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Stop Screenshot Service"
-        android:enabled="false"/>
+        android:text="Stop Screen Streaming"
+        android:textSize="16sp"
+        android:padding="16dp"
+        android:enabled="false"
+        android:layout_marginBottom="32dp"/>
+
+    <TextView
+        android:id="@+id/urlText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="14sp"
+        android:textColor="#2196F3"
+        android:gravity="center"
+        android:layout_marginBottom="16dp"/>
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Screenshots will be saved to:\n/storage/emulated/0/Appscreeenshot"
+        android:text="Features:"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="✓ H.264 hardware encoding\n✓ Low latency WebRTC streaming\n✓ Automatic file recording\n✓ 30fps @ 2Mbps\n✓ Saved to Movies/ScreenStreams/"
         android:textSize="14sp"
-        android:gravity="center"
-        android:layout_marginTop="24dp"/>
+        android:lineSpacingExtra="4dp"/>
 
 </LinearLayout>
