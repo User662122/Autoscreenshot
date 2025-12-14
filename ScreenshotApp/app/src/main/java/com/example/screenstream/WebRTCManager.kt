@@ -124,6 +124,11 @@ class WebRTCManager(
             override fun onDataChannel(channel: DataChannel?) {}
             override fun onRenegotiationNeeded() {}
             override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
+            
+            // Added missing abstract method
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {
+                Log.d(TAG, "ICE connection receiving change: $receiving")
+            }
         }
         
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, observer)
