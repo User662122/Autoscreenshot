@@ -65,8 +65,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     
-    // WebRTC
-    implementation("org.webrtc:google-webrtc:1.0.32006")
+    // WebRTC - Use Jitpack or local build
+    // Option 1: Stream WebRTC (recommended)
+    implementation("io.getstream:stream-webrtc-android:1.1.3")
+    
+    // Option 2: If Option 1 doesn't work, use this alternative
+    // implementation("com.mesibo.api:webrtc:1.0.5")
     
     // WebSocket Server (Java-WebSocket)
     implementation("org.java-websocket:Java-WebSocket:1.5.3")
