@@ -4,7 +4,6 @@ import android.app.NotificationManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import org.tensorflow.lite.Interpreter
@@ -15,12 +14,17 @@ import java.nio.channels.FileChannel
 import java.io.FileInputStream
 
 class TFLiteModelManager(private val context: Context) {
-    private var interpreters: Array<Interpreter?> = arrayOfNulls(8)
-    private val MODEL_PATH = "wbe_mnv2_96.tflite"
+    private companion object {
+        const val TAG = "TFLiteModelManager"
+        const val MODEL_PATH = "wbe_mnv2_96.tflite"
+        const val NUM_INTERPRETERS = 4
+        const val INPUT_SIZE = 96
+        const val CHANNEL_COUNT = 3
+    }
+
+    private var interpreters: Array<Interpreter?> = arrayOfNulls(NUM_INTERPRETERS)
     
     private val classNames = arrayOf("White", "Black", "Empty")
-    private val INPUT_SIZE = 96
-    private val CHANNEL_COUNT = 3
     
     private val chessSquaresNormal = arrayOf(
         "a8", "b8", "c8", "d8", "e8", "f8", "g8", "h8",
@@ -55,10 +59,12 @@ class TFLiteModelManager(private val context: Context) {
     private fun initializeModel(context: Context) {
         try {
             val model = loadModelFile(context)
-            for (i in 0 until 8) {
-                interpreters[i] = Interpreter(model)
+            for (i in 0 until NUM_INTERPRETERS) {
+                interpreters[i] = Interpreter(model, Interpreter.Options().apply {
+                    setNumThreads(2)
+                })
             }
-            Log.d(TAG, "Initialized 8 interpreter instances")
+            Log.d(TAG, "Initialized $NUM_INTERPRETERS interpreter instances")
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing model: ${e.message}")
             e.printStackTrace()
@@ -77,24 +83,20 @@ class TFLiteModelManager(private val context: Context) {
 
     suspend fun processChessBoard(pieces: List<Bitmap>, context: Context) {
         if (interpreters[0] == null) {
-            CoroutineManager.launchMain {
-                Toast.makeText(context, "Model not loaded", Toast.LENGTH_SHORT).show()
-            }
+            showToast(context, "Model not loaded")
             recycleBitmaps(pieces)
             return
         }
 
         if (pieces.size != 64) {
-            CoroutineManager.launchMain {
-                Toast.makeText(context, "Need exactly 64 pieces for chess board", Toast.LENGTH_SHORT).show()
-            }
+            showToast(context, "Need exactly 64 pieces for chess board")
             recycleBitmaps(pieces)
             return
         }
 
         try {
-            // Step 1: Classify all 64 pieces
-            val classifications = classifyAllPieces(pieces)
+            // Step 1: Classify all 64 pieces using parallel processing
+            val classifications = classifyAllPiecesParallel(pieces)
             
             // Step 2: Detect or use stored orientation
             val orientation = determineOrientation(classifications)
@@ -113,32 +115,41 @@ class TFLiteModelManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error processing chess board: ${e.message}")
             e.printStackTrace()
-            CoroutineManager.launchMain {
-                Toast.makeText(context, "Processing error: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            showToast(context, "Processing error: ${e.message}")
         } finally {
             recycleBitmaps(pieces)
         }
     }
 
-    private suspend fun classifyAllPieces(pieces: List<Bitmap>): List<String> {
+    /**
+     * Classify all 64 pieces in parallel using multiple interpreters
+     * Each interpreter handles 16 pieces (64 / NUM_INTERPRETERS)
+     */
+    private suspend fun classifyAllPiecesParallel(pieces: List<Bitmap>): List<String> {
         return withContext(Dispatchers.Default) {
             val classifications = Array(64) { "" }
             
-            val deferredResults = (0 until 64 step 8).map { i ->
+            // Calculate pieces per interpreter
+            val piecesPerInterpreter = 64 / NUM_INTERPRETERS
+            
+            val deferredResults = (0 until NUM_INTERPRETERS).map { interpreterIndex ->
                 async {
-                    val interpreterIndex = (i / 8) % 8
                     val interpreter = interpreters[interpreterIndex]!!
+                    val startIdx = interpreterIndex * piecesPerInterpreter
+                    val endIdx = minOf(startIdx + piecesPerInterpreter, 64)
 
-                    for (j in i until minOf(i + 8, 64)) {
-                        val classification = classifyBitmapWithInterpreter(pieces[j], interpreter)
-                        classifications[j] = classification
+                    Log.d(TAG, "Interpreter $interpreterIndex processing pieces $startIdx to ${endIdx - 1}")
+
+                    for (i in startIdx until endIdx) {
+                        val classification = classifyBitmapWithInterpreter(pieces[i], interpreter)
+                        classifications[i] = classification
+                        Log.d(TAG, "Piece $i -> $classification (interpreter $interpreterIndex)")
                     }
                 }
             }
 
             deferredResults.awaitAll()
-            Log.d(TAG, "All 64 pieces classified")
+            Log.d(TAG, "All 64 pieces classified in parallel")
             classifications.toList()
         }
     }
@@ -223,6 +234,7 @@ class TFLiteModelManager(private val context: Context) {
             }
         }
         
+        resizedBitmap.recycle()
         return inputBuffer
     }
 
@@ -270,9 +282,6 @@ class TFLiteModelManager(private val context: Context) {
         return message
     }
 
-    /**
-     * UPDATED: Fetch pending move FIRST, then send board state
-     */
     private fun sendDataToBackend(context: Context) {
         CoroutineManager.launchIO {
             try {
@@ -283,7 +292,6 @@ class TFLiteModelManager(private val context: Context) {
                 if (fetchSuccess) {
                     if (fetchedMove.isNotEmpty() && fetchedMove != "Invalid" && fetchedMove != "Game Over") {
                         Log.d(TAG, "Fetched AI move: $fetchedMove (already saved in NetworkManager)")
-                        // Move is already saved in NetworkManager.fetchPendingMove()
                     } else {
                         Log.d(TAG, "No pending AI move available")
                     }
@@ -291,7 +299,6 @@ class TFLiteModelManager(private val context: Context) {
                     Log.e(TAG, "Failed to fetch pending move, continuing with send...")
                 }
 
-                // Small delay between fetch and send
                 delay(200)
 
                 // STEP 2: Send start color if not sent yet
@@ -360,6 +367,12 @@ class TFLiteModelManager(private val context: Context) {
         }
     }
 
+    private fun showToast(context: Context, message: String) {
+        CoroutineManager.launchMain {
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun recycleBitmaps(pieces: List<Bitmap>) {
         try {
             pieces.forEach { 
@@ -374,7 +387,7 @@ class TFLiteModelManager(private val context: Context) {
     }
 
     fun getInterpreter(index: Int = 0): Interpreter? {
-        return if (index in 0..7) interpreters[index] else interpreters[0]
+        return if (index in 0 until NUM_INTERPRETERS) interpreters[index] else interpreters[0]
     }
 
     fun isModelLoaded(): Boolean {
@@ -386,15 +399,11 @@ class TFLiteModelManager(private val context: Context) {
         hasStoredOrientation = false
         hasStartColorSent = false
         
-        for (i in 0 until 8) {
+        for (i in 0 until NUM_INTERPRETERS) {
             interpreters[i]?.close()
             interpreters[i] = null
         }
         
-        Log.d(TAG, "TFLiteModelManager closed")
-    }
-
-    companion object {
-        private const val TAG = "TFLiteModelManager"
+        Log.d(TAG, "TFLiteModelManager closed - all $NUM_INTERPRETERS interpreters released")
     }
 }
