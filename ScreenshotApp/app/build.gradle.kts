@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.autoscreenshot"
+    namespace = "com.example.screenstream"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.autoscreenshot"
+        applicationId = "com.example.screenstream"
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -38,8 +38,20 @@ android {
         viewBinding = true
     }
 
-    aaptOptions {
-        noCompress("tflite")
+    packagingOptions {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/notice.txt",
+                "META-INF/ASL2.0",
+                "META-INF/*.kotlin_module"
+            )
+        }
     }
 }
 
@@ -53,12 +65,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     
-    // OkHttp
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // WebRTC
+    implementation("org.webrtc:google-webrtc:1.0.32006")
     
-    // TensorFlow Lite
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.14.0")
+    // WebSocket Server (Java-WebSocket)
+    implementation("org.java-websocket:Java-WebSocket:1.5.3")
 }
