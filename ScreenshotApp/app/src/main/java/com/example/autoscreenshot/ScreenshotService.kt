@@ -161,29 +161,39 @@ class ScreenshotService : Service() {
     }
 }
     private suspend fun captureScreenshot() {
-        val image = imageReader?.acquireLatestImage()
-        if (image != null) {
-            try {
-                val bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
-                if (bitmap != null) {
-                    val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
-                    
-                    // Extract 64 pieces and pass to TFLiteModelManager
-                    val pieces = extract64Pieces(cropped)
-                    
-                    // Recycle bitmaps we no longer need
-                    cropped.recycle()
-                    bitmap.recycle()
-                    
-                    // Pass pieces to TFLiteModelManager for all further processing
-                    modelManager.processChessBoard(pieces, this@ScreenshotService)
+    val image = imageReader?.acquireLatestImage()
+    if (image != null) {
+        try {
+            var bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
+            if (bitmap != null) {
+
+                // Resize if not 720x1600
+                val targetWidth = 720
+                val targetHeight = 1600
+                if (bitmap.width != targetWidth || bitmap.height != targetHeight) {
+                    val resizedBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+                    bitmap.recycle() // original bitmap recycle kar do
+                    bitmap = resizedBitmap
+                    Log.d(TAG, "Bitmap resized to ${targetWidth}x$targetHeight")
                 }
-            } finally {
-                image.close()
+
+                val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
+
+                // Extract 64 pieces and pass to TFLiteModelManager
+                val pieces = extract64Pieces(cropped)
+
+                // Recycle bitmaps we no longer need
+                cropped.recycle()
+                bitmap.recycle()
+
+                // Pass pieces to TFLiteModelManager for processing
+                modelManager.processChessBoard(pieces, this@ScreenshotService)
             }
+        } finally {
+            image.close()
         }
     }
-
+}
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
             val planes = image.planes
