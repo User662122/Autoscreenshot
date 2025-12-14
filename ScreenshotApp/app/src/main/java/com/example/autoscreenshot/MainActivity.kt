@@ -111,7 +111,20 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             
-            checkPermissionsAndStart()
+            // Check if service instance exists (restart scenario)
+            if (ChessMoveAccessibilityService.isServiceConnected()) {
+                // Service already exists, just restart screenshot service and polling
+                val intent = Intent(this, ScreenshotService::class.java).apply {
+                    putExtra("resultCode", Activity.RESULT_OK)
+                    putExtra("data", Intent())
+                }
+                
+                // For restart, we need media projection permission again
+                checkPermissionsAndStart()
+            } else {
+                // First time start
+                checkPermissionsAndStart()
+            }
         }
         
         binding.stopButton.setOnClickListener {
