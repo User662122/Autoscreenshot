@@ -55,10 +55,10 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     private val TAG = "ChessMoveAccessibility"
     
     // Chess board coordinates (based on your crop: x1=11, y1=505, x2=709, y2=1201)
-    private val BOARD_LEFT = 10
-    private val BOARD_TOP = 432
-    private val BOARD_RIGHT = 712
-    private val BOARD_BOTTOM = 1131
+    private val BOARD_LEFT = 11
+    private val BOARD_TOP = 505
+    private val BOARD_RIGHT = 709
+    private val BOARD_BOTTOM = 1201
     
     private val BOARD_WIDTH = BOARD_RIGHT - BOARD_LEFT
     private val BOARD_HEIGHT = BOARD_BOTTOM - BOARD_TOP
