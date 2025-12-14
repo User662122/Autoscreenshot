@@ -2,9 +2,9 @@ name: Build Debug APK
 
 on:
   push:
-    branches: [ Om, master ]
+    branches: [ Video, master ]
   pull_request:
-    branches: [ Om, master ]
+    branches: [ Video, master ]
   workflow_dispatch:
 
 jobs:
