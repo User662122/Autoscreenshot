@@ -122,43 +122,44 @@ class ScreenshotService : Service() {
     }
 
     private fun setupVirtualDisplay() {
-        try {
-            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val metrics = DisplayMetrics()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                display?.getRealMetrics(metrics)
-            } else {
-                @Suppress("DEPRECATION")
-                windowManager.defaultDisplay.getRealMetrics(metrics)
-            }
+    try {
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val metrics = DisplayMetrics()
 
-            val width = metrics.widthPixels
-            val height = metrics.heightPixels
-            val density = metrics.densityDpi
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
 
-            Log.d(TAG, "Display metrics: $width x $height, density: $density")
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        val density = metrics.densityDpi
 
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        Log.d(TAG, "Display metrics: ${width}x$height density=$density")
 
-            virtualDisplay = mediaProjection?.createVirtualDisplay(
-                "ScreenCapture",
-                width,
-                height,
-                density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader?.surface,
-                null,
-                null
-            )
+        imageReader = ImageReader.newInstance(
+            width,
+            height,
+            PixelFormat.RGBA_8888,
+            2
+        )
 
-            Log.d(TAG, "Virtual display setup completed")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error setting up virtual display: ${e.message}")
-            showToast("❌ Display setup error")
-            e.printStackTrace()
-        }
+        virtualDisplay = mediaProjection?.createVirtualDisplay(
+            "ScreenCapture",
+            width,
+            height,
+            density,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader!!.surface,
+            null,
+            null
+        )
+
+        Log.d(TAG, "Virtual display created successfully")
+
+    } catch (e: Exception) {
+        Log.e(TAG, "Virtual display setup failed", e)
+        stopSelf()
     }
-
+}
     private suspend fun captureScreenshot() {
         val image = imageReader?.acquireLatestImage()
         if (image != null) {
