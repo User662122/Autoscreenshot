@@ -46,12 +46,20 @@ class MainActivity : AppCompatActivity() {
                 startService(intent)
             }
             
+            // Get device IP address
+            val ipAddress = getDeviceIpAddress()
+            val serverUrl = if (ipAddress != null) {
+                "http://$ipAddress:8080"
+            } else {
+                "http://YOUR_DEVICE_IP:8080"
+            }
+            
             binding.statusText.text = "Screen streaming active"
             binding.startButton.isEnabled = false
             binding.stopButton.isEnabled = true
-            binding.urlText.text = "WebRTC URL: http://YOUR_SERVER_IP:8080"
+            binding.urlText.text = "Open in browser: $serverUrl"
             
-            Toast.makeText(this, "Screen streaming started", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Server: $serverUrl", Toast.LENGTH_LONG).show()
         } else {
             Toast.makeText(this, "Media projection permission denied", Toast.LENGTH_SHORT).show()
         }
@@ -64,6 +72,12 @@ class MainActivity : AppCompatActivity() {
         
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         
+        // Display device IP on startup
+        val ipAddress = getDeviceIpAddress()
+        if (ipAddress != null) {
+            binding.urlText.text = "Your device IP: $ipAddress"
+        }
+        
         binding.startButton.setOnClickListener {
             checkPermissionsAndStart()
         }
@@ -73,9 +87,28 @@ class MainActivity : AppCompatActivity() {
             binding.statusText.text = "Screen streaming stopped"
             binding.startButton.isEnabled = true
             binding.stopButton.isEnabled = false
-            binding.urlText.text = ""
+            binding.urlText.text = if (ipAddress != null) "Your device IP: $ipAddress" else ""
             Toast.makeText(this, "Screen streaming stopped", Toast.LENGTH_SHORT).show()
         }
+    }
+    
+    private fun getDeviceIpAddress(): String? {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (!address.isLoopbackAddress && address is java.net.Inet4Address) {
+                        return address.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting IP address", e)
+        }
+        return null
     }
     
     private fun checkPermissionsAndStart() {
