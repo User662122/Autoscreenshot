@@ -87,8 +87,15 @@ class ScreenStreamService : Service() {
             // Initialize screen encoder with H.264
             screenEncoder = ScreenEncoder(width, height, this)
             
-            // Initialize WebRTC manager
+            // Initialize WebRTC manager with built-in server
             webRTCManager = WebRTCManager(this, screenEncoder)
+            
+            // Get server URL and update notification
+            val serverUrl = getDeviceIpAddress()
+            if (serverUrl != null) {
+                Log.d(TAG, "WebRTC Server running at: http://$serverUrl:8080")
+                updateNotification("Open: http://$serverUrl:8080")
+            }
             
             // Create virtual display with encoder's input surface
             virtualDisplay = mediaProjection?.createVirtualDisplay(
@@ -108,6 +115,38 @@ class ScreenStreamService : Service() {
             Log.e(TAG, "Screen capture setup failed", e)
             stopSelf()
         }
+    }
+    
+    private fun getDeviceIpAddress(): String? {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (!address.isLoopbackAddress && address is java.net.Inet4Address) {
+                        return address.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting IP address", e)
+        }
+        return null
+    }
+    
+    private fun updateNotification(message: String) {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Screen Streaming")
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+        
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     private fun createNotificationChannel() {
