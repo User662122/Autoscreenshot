@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.autoscreenshot">
+    package="com.example.screenstream">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -14,8 +14,9 @@
         android:requestLegacyExternalStorage="true"
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
-        android:label="Auto Screenshot"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+        android:label="Screen Stream"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
@@ -27,23 +28,10 @@
         </activity>
 
         <service
-            android:name=".ScreenshotService"
+            android:name=".ScreenStreamService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
-
-        <!-- 🔥 Yeh tumhara Accessibility Service add kiya gaya block hai -->
-        <service
-            android:name=".ChessMoveAccessibilityService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
 
     </application>
 
