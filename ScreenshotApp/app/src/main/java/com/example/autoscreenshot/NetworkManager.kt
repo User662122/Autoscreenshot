@@ -28,8 +28,56 @@ object NetworkManager {
     }
 
     /**
+     * Fetch pending AI move from /move endpoint (empty body or minimal request)
+     * This should be called FIRST before sending board state
+     */
+    suspend fun fetchPendingMove(context: Context): Pair<Boolean, String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val ngrokUrl = MainActivity.getNgrokUrl(context)
+                val url = "$ngrokUrl/move"
+
+                Log.d(TAG, "Fetching pending AI move from: $url")
+
+                // Send empty body or "fetch" signal
+                val requestBody = "".toRequestBody("text/plain".toMediaTypeOrNull())
+
+                val request = Request.Builder()
+                    .url(url)
+                    .post(requestBody)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val bodyString = response.body?.string()?.trim() ?: ""
+                val success = response.isSuccessful
+
+                if (success) {
+                    Log.d(TAG, "Fetch response: $bodyString")
+                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
+                        Log.d(TAG, "Received pending AI move: $bodyString")
+                        // Save to SharedPreferences immediately
+                        Prefs.setString(context, "pending_ai_move", bodyString)
+                        showToast(context, "AI: $bodyString")
+                    } else {
+                        Log.d(TAG, "No pending move available")
+                    }
+                } else {
+                    Log.e(TAG, "Fetch failed: ${response.code} - ${response.message}")
+                }
+
+                response.close()
+                Pair(success, bodyString)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching pending move: ${e.message}")
+                e.printStackTrace()
+                Pair(false, "")
+            }
+        }
+    }
+
+    /**
      * Send starting color to /start endpoint
-     * Returns Pair(success, responseText)
      */
     suspend fun sendStartColor(context: Context, color: String): Pair<Boolean, String> {
         return withContext(Dispatchers.IO) {
@@ -52,7 +100,6 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Start color sent, response: $bodyString")
-                    // Show only AI move response
                     if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
                         showToast(context, "AI: $bodyString")
                     }
@@ -74,8 +121,8 @@ object NetworkManager {
     }
 
     /**
-     * Send piece positions format:
-     * "white:a1,a2;black:a7,a8"
+     * Send piece positions to /move endpoint
+     * Format: "white:a1,a2;black:a7,a8"
      */
     suspend fun sendPiecePositions(
         context: Context,
@@ -106,7 +153,6 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Positions sent, response: $bodyString")
-                    // Show only AI move response
                     if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
                         showToast(context, "AI: $bodyString")
                     }
@@ -128,7 +174,7 @@ object NetworkManager {
     }
 
     /**
-     * Send UCI move "e2e4"
+     * Send UCI move to /move endpoint
      */
     suspend fun sendMove(context: Context, move: String): Pair<Boolean, String> {
         return withContext(Dispatchers.IO) {
@@ -151,7 +197,6 @@ object NetworkManager {
 
                 if (success) {
                     Log.d(TAG, "Move sent, AI Response: $bodyString")
-                    // Show only AI move response
                     if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
                         showToast(context, "AI: $bodyString")
                     }
