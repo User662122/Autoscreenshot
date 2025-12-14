@@ -1,219 +1,208 @@
-package com.example.autoscreenshot
+package com.example.screenstream
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
+import android.media.MediaCodec
 import android.util.Log
-import android.widget.Toast
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
+import io.socket.client.IO
+import io.socket.client.Socket
+import org.json.JSONObject
+import org.webrtc.*
+import java.nio.ByteBuffer
 
-object NetworkManager {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
-    private const val TAG = "NetworkManager"
-    private val handler = Handler(Looper.getMainLooper())
+class WebRTCManager(
+    private val context: Context,
+    private val screenEncoder: ScreenEncoder
+) {
+    private var peerConnectionFactory: PeerConnectionFactory? = null
+    private var peerConnection: PeerConnection? = null
+    private var socket: Socket? = null
+    
+    private val TAG = "WebRTCManager"
+    
+    // Signaling server URL (replace with your server)
+    private val SIGNALING_SERVER_URL = "http://YOUR_SERVER_IP:8080"
 
-    private fun showToast(context: Context, message: String) {
-        handler.post {
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    init {
+        initializeWebRTC()
+        setupSignaling()
+        setupEncoderCallback()
+    }
+
+    private fun initializeWebRTC() {
+        try {
+            // Initialize PeerConnectionFactory
+            val initializationOptions = PeerConnectionFactory.InitializationOptions.builder(context)
+                .setEnableInternalTracer(false)
+                .createInitializationOptions()
+            
+            PeerConnectionFactory.initialize(initializationOptions)
+            
+            val options = PeerConnectionFactory.Options()
+            
+            peerConnectionFactory = PeerConnectionFactory.builder()
+                .setOptions(options)
+                .createPeerConnectionFactory()
+            
+            Log.d(TAG, "WebRTC initialized")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing WebRTC", e)
         }
     }
 
-    /**
-     * Fetch pending AI move from /move endpoint (empty body or minimal request)
-     * This should be called FIRST before sending board state
-     */
-    suspend fun fetchPendingMove(context: Context): Pair<Boolean, String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val ngrokUrl = MainActivity.getNgrokUrl(context)
-                val url = "$ngrokUrl/move"
-
-                Log.d(TAG, "Fetching pending AI move from: $url")
-
-                // Send empty body or "fetch" signal
-                val requestBody = "".toRequestBody("text/plain".toMediaTypeOrNull())
-
-                val request = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val bodyString = response.body?.string()?.trim() ?: ""
-                val success = response.isSuccessful
-
-                if (success) {
-                    Log.d(TAG, "Fetch response: $bodyString")
-                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
-                        Log.d(TAG, "Received pending AI move: $bodyString")
-                        // Save to SharedPreferences immediately
-                        Prefs.setString(context, "pending_ai_move", bodyString)
-                        showToast(context, "AI: $bodyString")
-                    } else {
-                        Log.d(TAG, "No pending move available")
-                    }
-                } else {
-                    Log.e(TAG, "Fetch failed: ${response.code} - ${response.message}")
-                }
-
-                response.close()
-                Pair(success, bodyString)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error fetching pending move: ${e.message}")
-                e.printStackTrace()
-                Pair(false, "")
+    private fun setupSignaling() {
+        try {
+            socket = IO.socket(SIGNALING_SERVER_URL)
+            
+            socket?.on(Socket.EVENT_CONNECT) {
+                Log.d(TAG, "Connected to signaling server")
+                createOffer()
             }
+            
+            socket?.on("answer") { args ->
+                val data = args[0] as JSONObject
+                val sdp = SessionDescription(
+                    SessionDescription.Type.ANSWER,
+                    data.getString("sdp")
+                )
+                peerConnection?.setRemoteDescription(object : SdpObserver {
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onSetSuccess() {
+                        Log.d(TAG, "Remote description set")
+                    }
+                    override fun onCreateFailure(p0: String?) {}
+                    override fun onSetFailure(p0: String?) {
+                        Log.e(TAG, "Failed to set remote description: $p0")
+                    }
+                }, sdp)
+            }
+            
+            socket?.on("ice-candidate") { args ->
+                val data = args[0] as JSONObject
+                val candidate = IceCandidate(
+                    data.getString("sdpMid"),
+                    data.getInt("sdpMLineIndex"),
+                    data.getString("candidate")
+                )
+                peerConnection?.addIceCandidate(candidate)
+                Log.d(TAG, "Added ICE candidate")
+            }
+            
+            socket?.connect()
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up signaling", e)
         }
     }
 
-    /**
-     * Send starting color to /start endpoint
-     */
-    suspend fun sendStartColor(context: Context, color: String): Pair<Boolean, String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val ngrokUrl = MainActivity.getNgrokUrl(context)
-                val url = "$ngrokUrl/start"
-
-                Log.d(TAG, "Sending start color: $color to $url")
-
-                val requestBody = color.toRequestBody("text/plain".toMediaTypeOrNull())
-
-                val request = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val bodyString = response.body?.string()?.trim() ?: ""
-                val success = response.isSuccessful
-
-                if (success) {
-                    Log.d(TAG, "Start color sent, response: $bodyString")
-                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
-                        showToast(context, "AI: $bodyString")
+    private fun createPeerConnection() {
+        val iceServers = listOf(
+            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+        )
+        
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
+        }
+        
+        val observer = object : PeerConnection.Observer {
+            override fun onIceCandidate(candidate: IceCandidate?) {
+                candidate?.let {
+                    val json = JSONObject().apply {
+                        put("sdpMid", it.sdpMid)
+                        put("sdpMLineIndex", it.sdpMLineIndex)
+                        put("candidate", it.sdp)
                     }
-                } else {
-                    Log.e(TAG, "Failed: ${response.code} - ${response.message}")
-                    showToast(context, "❌ /start failed: ${response.code}")
+                    socket?.emit("ice-candidate", json)
+                    Log.d(TAG, "ICE candidate sent")
                 }
-
-                response.close()
-                Pair(success, bodyString)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending start color: ${e.message}")
-                showToast(context, "❌ Network error: ${e.message?.take(30)}")
-                e.printStackTrace()
-                Pair(false, "")
             }
+            
+            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
+                Log.d(TAG, "ICE connection state: $state")
+            }
+            
+            override fun onSignalingChange(state: PeerConnection.SignalingState?) {
+                Log.d(TAG, "Signaling state: $state")
+            }
+            
+            override fun onConnectionChange(state: PeerConnection.PeerConnectionState?) {
+                Log.d(TAG, "Connection state: $state")
+            }
+            
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
+            override fun onAddStream(stream: MediaStream?) {}
+            override fun onRemoveStream(stream: MediaStream?) {}
+            override fun onDataChannel(channel: DataChannel?) {}
+            override fun onRenegotiationNeeded() {}
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
+        }
+        
+        peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, observer)
+        Log.d(TAG, "PeerConnection created")
+    }
+
+    private fun createOffer() {
+        createPeerConnection()
+        
+        val constraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+        }
+        
+        peerConnection?.createOffer(object : SdpObserver {
+            override fun onCreateSuccess(sdp: SessionDescription?) {
+                peerConnection?.setLocalDescription(object : SdpObserver {
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onSetSuccess() {
+                        val json = JSONObject().apply {
+                            put("type", sdp?.type?.canonicalForm())
+                            put("sdp", sdp?.description)
+                        }
+                        socket?.emit("offer", json)
+                        Log.d(TAG, "Offer sent")
+                    }
+                    override fun onCreateFailure(p0: String?) {}
+                    override fun onSetFailure(p0: String?) {}
+                }, sdp)
+            }
+            
+            override fun onSetSuccess() {}
+            override fun onCreateFailure(error: String?) {
+                Log.e(TAG, "Failed to create offer: $error")
+            }
+            override fun onSetFailure(error: String?) {}
+        }, constraints)
+    }
+
+    private fun setupEncoderCallback() {
+        screenEncoder.onEncodedFrame = { encodedData, bufferInfo ->
+            // Here you would send the encoded H.264 data through WebRTC
+            // This requires custom RTP packetization or using a custom video source
+            // For simplicity, this is a placeholder
+            
+            // In a production app, you'd create a custom VideoTrack that feeds
+            // the H.264 frames into WebRTC's video pipeline
+            
+            Log.v(TAG, "Encoded frame: ${bufferInfo.size} bytes")
         }
     }
 
-    /**
-     * Send piece positions to /move endpoint
-     * Format: "white:a1,a2;black:a7,a8"
-     */
-    suspend fun sendPiecePositions(
-        context: Context,
-        whitePositions: List<String>,
-        blackPositions: List<String>
-    ): Pair<Boolean, String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val ngrokUrl = MainActivity.getNgrokUrl(context)
-                val url = "$ngrokUrl/move"
-
-                val whiteStr = whitePositions.joinToString(",")
-                val blackStr = blackPositions.joinToString(",")
-                val positionData = "white:$whiteStr;black:$blackStr"
-
-                Log.d(TAG, "Sending positions to $url: $positionData")
-
-                val requestBody = positionData.toRequestBody("text/plain".toMediaTypeOrNull())
-
-                val request = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val bodyString = response.body?.string()?.trim() ?: ""
-                val success = response.isSuccessful
-
-                if (success) {
-                    Log.d(TAG, "Positions sent, response: $bodyString")
-                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
-                        showToast(context, "AI: $bodyString")
-                    }
-                } else {
-                    Log.e(TAG, "Failed: ${response.code} - ${response.message}")
-                    showToast(context, "❌ /move failed: ${response.code}")
-                }
-
-                response.close()
-                Pair(success, bodyString)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending piece positions: ${e.message}")
-                showToast(context, "❌ Network error: ${e.message?.take(30)}")
-                e.printStackTrace()
-                Pair(false, "")
-            }
-        }
-    }
-
-    /**
-     * Send UCI move to /move endpoint
-     */
-    suspend fun sendMove(context: Context, move: String): Pair<Boolean, String> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val ngrokUrl = MainActivity.getNgrokUrl(context)
-                val url = "$ngrokUrl/move"
-
-                Log.d(TAG, "Sending move: $move → $url")
-
-                val requestBody = move.toRequestBody("text/plain".toMediaTypeOrNull())
-
-                val request = Request.Builder()
-                    .url(url)
-                    .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val bodyString = response.body?.string()?.trim() ?: ""
-                val success = response.isSuccessful
-
-                if (success) {
-                    Log.d(TAG, "Move sent, AI Response: $bodyString")
-                    if (bodyString.isNotEmpty() && bodyString != "Invalid" && bodyString != "Game Over") {
-                        showToast(context, "AI: $bodyString")
-                    }
-                } else {
-                    Log.e(TAG, "Failed: ${response.code} - ${response.message}")
-                    showToast(context, "❌ Failed: ${response.code}")
-                }
-
-                response.close()
-                Pair(success, bodyString)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending move: ${e.message}")
-                showToast(context, "❌ Network error: ${e.message?.take(30)}")
-                e.printStackTrace()
-                Pair(false, "")
-            }
-        }
+    fun release() {
+        Log.d(TAG, "Releasing WebRTC")
+        
+        socket?.disconnect()
+        socket?.close()
+        socket = null
+        
+        peerConnection?.close()
+        peerConnection?.dispose()
+        peerConnection = null
+        
+        peerConnectionFactory?.dispose()
+        peerConnectionFactory = null
+        
+        Log.d(TAG, "WebRTC released")
     }
 }
