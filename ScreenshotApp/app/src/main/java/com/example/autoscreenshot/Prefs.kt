@@ -1,4 +1,3 @@
-// File: ScreenshotApp/app/src/main/java/com/example/autoscreenshot/Prefs.kt
 package com.example.autoscreenshot
 
 import android.content.Context
@@ -9,14 +8,108 @@ object Prefs {
     private const val PREFS_NAME = "mydata"
     private const val TAG = "Prefs"
     
+    // Global listener interface
+    interface OnPreferenceChangeListener {
+        fun onPreferenceChanged(key: String, value: String?)
+    }
+    
+    // Store all registered listeners
+    private val listeners = mutableMapOf<String, MutableList<OnPreferenceChangeListener>>()
+    
+    // SharedPreferences change listener
+    private var sharedPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+    private var sharedPreferences: SharedPreferences? = null
+    
     private fun getPreferences(context: Context): SharedPreferences {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (sharedPreferences == null) {
+            sharedPreferences = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            setupGlobalListener(context.applicationContext)
+        }
+        return sharedPreferences!!
+    }
+    
+    /**
+     * Setup global SharedPreferences listener
+     */
+    private fun setupGlobalListener(context: Context) {
+        if (sharedPrefsListener != null) return
+        
+        sharedPrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key != null) {
+                val value = prefs.getString(key, null)
+                Log.d(TAG, "SharedPreference changed: $key = $value")
+                
+                // Notify all registered listeners for this key
+                listeners[key]?.forEach { listener ->
+                    try {
+                        listener.onPreferenceChanged(key, value)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error notifying listener for key $key: ${e.message}")
+                    }
+                }
+                
+                // Notify wildcard listeners (registered for all keys)
+                listeners["*"]?.forEach { listener ->
+                    try {
+                        listener.onPreferenceChanged(key, value)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error notifying wildcard listener: ${e.message}")
+                    }
+                }
+            }
+        }
+        
+        getPreferences(context).registerOnSharedPreferenceChangeListener(sharedPrefsListener)
+        Log.d(TAG, "Global SharedPreferences listener registered")
+    }
+    
+    /**
+     * Register a listener for a specific key or all keys ("*")
+     * @param key The preference key to listen to, or "*" for all keys
+     * @param listener The listener callback
+     */
+    fun registerListener(context: Context, key: String, listener: OnPreferenceChangeListener) {
+        // Ensure global listener is set up
+        getPreferences(context)
+        
+        if (!listeners.containsKey(key)) {
+            listeners[key] = mutableListOf()
+        }
+        listeners[key]?.add(listener)
+        Log.d(TAG, "Listener registered for key: $key (Total listeners for this key: ${listeners[key]?.size})")
+    }
+    
+    /**
+     * Unregister a specific listener for a key
+     */
+    fun unregisterListener(key: String, listener: OnPreferenceChangeListener) {
+        listeners[key]?.remove(listener)
+        if (listeners[key]?.isEmpty() == true) {
+            listeners.remove(key)
+        }
+        Log.d(TAG, "Listener unregistered for key: $key")
+    }
+    
+    /**
+     * Unregister all listeners for a specific key
+     */
+    fun unregisterAllListeners(key: String) {
+        listeners.remove(key)
+        Log.d(TAG, "All listeners unregistered for key: $key")
+    }
+    
+    /**
+     * Clear all listeners
+     */
+    fun clearAllListeners() {
+        listeners.clear()
+        Log.d(TAG, "All listeners cleared")
     }
 
     fun setString(context: Context, key: String, value: String) {
         with(getPreferences(context).edit()) {
             putString(key, value)
-            apply()
+            apply() // This will trigger the listener automatically
         }
     }
 
@@ -27,7 +120,7 @@ object Prefs {
     fun remove(context: Context, key: String) {
         with(getPreferences(context).edit()) {
             remove(key)
-            apply()
+            apply() // This will trigger the listener automatically
         }
     }
 
@@ -83,5 +176,18 @@ object Prefs {
         }
         
         Log.d(TAG, "All game data reset complete")
+    }
+    
+    /**
+     * Clean up when no longer needed
+     */
+    fun cleanup(context: Context) {
+        sharedPrefsListener?.let {
+            getPreferences(context).unregisterOnSharedPreferenceChangeListener(it)
+            sharedPrefsListener = null
+        }
+        listeners.clear()
+        sharedPreferences = null
+        Log.d(TAG, "Prefs cleanup complete")
     }
 }
