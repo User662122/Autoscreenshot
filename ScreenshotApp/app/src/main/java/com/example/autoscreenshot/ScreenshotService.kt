@@ -169,7 +169,7 @@ class ScreenshotService : Service() {
                         Log.d(TAG, "Bitmap resized to ${targetWidth}x$targetHeight")
                     }
 
-                    val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 431, 712, 1132) }
+                    val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 505, 709, 1201) }
 
                     // Extract 64 pieces and pass to TFLiteModelManager
                     val pieces = extract64Pieces(cropped)
