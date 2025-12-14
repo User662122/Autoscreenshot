@@ -42,6 +42,13 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
+            // Check if accessibility service is connected
+            if (!ChessMoveAccessibilityService.isServiceConnected()) {
+                Toast.makeText(this, "Please toggle Accessibility Service off and on again", Toast.LENGTH_LONG).show()
+                ChessMoveAccessibilityService.openAccessibilitySettings(this)
+                return@registerForActivityResult
+            }
+            
             val intent = Intent(this, ScreenshotService::class.java).apply {
                 putExtra("resultCode", result.resultCode)
                 putExtra("data", result.data)
@@ -53,10 +60,27 @@ class MainActivity : AppCompatActivity() {
                 startService(intent)
             }
             
-            binding.statusText.text = "Screenshot service started"
+            binding.statusText.text = "Starting in 15 seconds..."
             binding.startButton.isEnabled = false
             binding.stopButton.isEnabled = true
-            Toast.makeText(this, "Screenshot service started successfully", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Services will start in 15 seconds", Toast.LENGTH_LONG).show()
+            
+            // Start move polling after 15 second delay
+            CoroutineManager.launchMain {
+                delay(15000) // 15 seconds delay
+                
+                val started = ChessMoveAccessibilityService.startMovePolling(this@MainActivity)
+                if (started) {
+                    binding.statusText.text = "Screenshot service running"
+                    Toast.makeText(this@MainActivity, "Screenshot service started successfully", Toast.LENGTH_SHORT).show()
+                } else {
+                    binding.statusText.text = "Failed to start"
+                    Toast.makeText(this@MainActivity, "Failed to start accessibility service", Toast.LENGTH_SHORT).show()
+                    stopService(Intent(this@MainActivity, ScreenshotService::class.java))
+                    binding.startButton.isEnabled = true
+                    binding.stopButton.isEnabled = false
+                }
+            }
         } else {
             Toast.makeText(this, "Media projection permission denied", Toast.LENGTH_SHORT).show()
         }
@@ -79,10 +103,20 @@ class MainActivity : AppCompatActivity() {
         updateAccessibilityStatus()
         
         binding.startButton.setOnClickListener {
+            // Check if accessibility service is enabled
+            if (!ChessMoveAccessibilityService.isAccessibilityServiceEnabled(this)) {
+                Toast.makeText(this, "Please enable Accessibility Service first", Toast.LENGTH_LONG).show()
+                ChessMoveAccessibilityService.openAccessibilitySettings(this)
+                return@setOnClickListener
+            }
+            
             checkPermissionsAndStart()
         }
         
         binding.stopButton.setOnClickListener {
+            // Stop move polling
+            ChessMoveAccessibilityService.stopMovePolling()
+            
             stopService(Intent(this, ScreenshotService::class.java))
             binding.statusText.text = "Screenshot service stopped"
             binding.startButton.isEnabled = true
@@ -113,10 +147,12 @@ class MainActivity : AppCompatActivity() {
     
     private fun updateAccessibilityStatus() {
         val isEnabled = ChessMoveAccessibilityService.isAccessibilityServiceEnabled(this)
-        binding.accessibilityStatusText.text = if (isEnabled) {
-            "Accessibility Service: Enabled ✓"
-        } else {
-            "Accessibility Service: Disabled"
+        val isConnected = ChessMoveAccessibilityService.isServiceConnected()
+        
+        binding.accessibilityStatusText.text = when {
+            isEnabled && isConnected -> "Accessibility Service: Enabled ✓ (Connected)"
+            isEnabled && !isConnected -> "Accessibility Service: Enabled (Not Connected - Toggle Off/On)"
+            else -> "Accessibility Service: Disabled"
         }
         binding.enableAccessibilityButton.isEnabled = !isEnabled
     }
