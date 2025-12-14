@@ -1,305 +1,167 @@
-package com.example.autoscreenshot
+package com.example.screenstream
 
-import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
+import android.app.*
+import android.content.Context
 import android.content.Intent
-import android.graphics.Path
-import android.provider.Settings
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.util.DisplayMetrics
 import android.util.Log
-import android.view.accessibility.AccessibilityEvent
-import kotlinx.coroutines.*
-import okhttp3.*
-import java.io.IOException
+import android.view.WindowManager
+import androidx.core.app.NotificationCompat
 
-class ChessMoveAccessibilityService : AccessibilityService() {
+class ScreenStreamService : Service() {
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private val handler = Handler(Looper.getMainLooper())
     
-    companion object {
-        private var serviceInstance: ChessMoveAccessibilityService? = null
-        
-        fun isAccessibilityServiceEnabled(context: android.content.Context): Boolean {
-            val service = "${context.packageName}/${ChessMoveAccessibilityService::class.java.name}"
-            val enabledServices = Settings.Secure.getString(
-                context.contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            )
-            return enabledServices?.contains(service) == true
-        }
-        
-        fun openAccessibilitySettings(context: android.content.Context) {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            context.startActivity(intent)
-        }
-        
-        fun startMovePolling(context: android.content.Context): Boolean {
-            return if (serviceInstance != null) {
-                serviceInstance?.startPolling()
-                true
-            } else {
-                false
-            }
-        }
-        
-        fun stopMovePolling() {
-            serviceInstance?.stopPolling()
-        }
-        
-        fun isServiceConnected(): Boolean {
-            return serviceInstance != null
-        }
+    private lateinit var screenEncoder: ScreenEncoder
+    private lateinit var webRTCManager: WebRTCManager
+    
+    private val TAG = "ScreenStreamService"
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(NOTIFICATION_ID, createNotification())
+        Log.d(TAG, "ScreenStreamService created")
     }
-    
-    private val client = OkHttpClient()
-    private var isRunning = false
-    private var pollingJob: Job? = null
-    private val TAG = "ChessMoveAccessibility"
-    
-    // Chess board coordinates (based on your crop: x1=11, y1=505, x2=709, y2=1201)
-    private val BOARD_LEFT = 11
-    private val BOARD_TOP = 505
-    private val BOARD_RIGHT = 709
-    private val BOARD_BOTTOM = 1201
-    
-    private val BOARD_WIDTH = BOARD_RIGHT - BOARD_LEFT
-    private val BOARD_HEIGHT = BOARD_BOTTOM - BOARD_TOP
-    private val CELL_WIDTH = BOARD_WIDTH / 8
-    private val CELL_HEIGHT = BOARD_HEIGHT / 8
-    
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        serviceInstance = this
-        Log.d(TAG, "Chess Move Accessibility Service Connected")
-    }
-    
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Not needed for our use case
-    }
-    
-    override fun onInterrupt() {
-        Log.d(TAG, "Service interrupted")
-    }
-    
-    fun startPolling() {
-        if (isRunning) {
-            Log.d(TAG, "Polling already running")
-            return
-        }
-        
-        isRunning = true
-        Log.d(TAG, "Starting move polling...")
-        
-        pollingJob = CoroutineManager.launchIO {
-            // Wait for /start to be called first
-            while (isRunning) {
-                val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
-                
-                if (bottomColor.isNotEmpty()) {
-                    Log.d(TAG, "Start color detected: $bottomColor. Beginning move polling...")
-                    break
-                }
-                
-                Log.d(TAG, "Waiting for /start to be called...")
-                delay(3000)
-            }
-            
-            // Now start polling SharedPreferences for moves
-            while (isRunning) {
-                try {
-                    // Read pending move from SharedPreferences (set by ScreenshotService)
-                    val move = fetchMoveFromSharedPreferences()
-                    if (move != null && move.isNotEmpty()) {
-                        Log.d(TAG, "Found pending move: $move")
-                        
-                        // Mark that we're executing the move
-                        Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, true)
-                        
-                        // Execute the move
-                        val success = executeMove(move)
-                        
-                        if (success) {
-                            // Clear the move after successful execution
-                            Prefs.setString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
-                            Log.d(TAG, "Move executed successfully and cleared from SharedPreferences")
-                        } else {
-                            Log.e(TAG, "Move execution failed, will retry")
-                        }
-                        
-                        // Mark execution complete
-                        Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
-                    }
-                    
-                    // Poll every 2 seconds
-                    delay(2000)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error in polling loop: ${e.message}")
-                    e.printStackTrace()
-                    Prefs.setMoveExecuting(this@ChessMoveAccessibilityService, false)
-                    delay(5000) // Wait longer on error
-                }
-            }
-            
-            Log.d(TAG, "Move polling stopped")
-        }
-    }
-    
-    fun stopPolling() {
-        if (!isRunning) {
-            Log.d(TAG, "Polling already stopped")
-            return
-        }
-        
-        isRunning = false
-        pollingJob?.cancel()
-        pollingJob = null
-        Log.d(TAG, "Stopping move polling...")
-    }
-    
-    private fun fetchMoveFromSharedPreferences(): String? {
-        // Read pending AI move from SharedPreferences (stored by ScreenshotService)
-        val pendingMove = Prefs.getString(this@ChessMoveAccessibilityService, "pending_ai_move", "")
-        
-        if (pendingMove.isNotEmpty()) {
-            Log.d(TAG, "Found pending AI move in SharedPreferences: $pendingMove")
-            return pendingMove
-        }
-        
-        return null
-    }
-    
-    private suspend fun executeMove(move: String): Boolean {
-        if (move.length < 4) {
-            Log.e(TAG, "Invalid move: $move")
-            return false
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "ScreenStreamService starting")
+
+        val resultCode = intent?.getIntExtra("resultCode", -1) ?: -1
+        val data = intent?.getParcelableExtra<Intent>("data")
+
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            Log.e(TAG, "Invalid result code or data")
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         try {
-            val fromSquare = move.substring(0, 2)
-            val toSquare = move.substring(2, 4)
+            val mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
 
-            Log.d(TAG, "Executing move: $fromSquare → $toSquare")
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    super.onStop()
+                    Log.d(TAG, "MediaProjection stopped")
+                    stopSelf()
+                }
+            }, handler)
 
-            val from = squareToScreenCoordinates(fromSquare)
-            val to = squareToScreenCoordinates(toSquare)
-
-            if (from == null || to == null) {
-                Log.e(TAG, "Coordinate conversion failed for $move")
-                return false
-            }
-
-            // First tap
-            val tap1 = performTap(from.first, from.second)
-            if (!tap1) {
-                Log.e(TAG, "FAILED: First tap could not be completed for $move")
-                return false
-            }
-
-            delay(300)
-
-            // Second tap
-            val tap2 = performTap(to.first, to.second)
-            if (!tap2) {
-                Log.e(TAG, "FAILED: Second tap could not be completed for $move")
-                return false
-            }
-
-            Log.d(TAG, "Move executed SUCCESSFULLY: $fromSquare → $toSquare")
-            return true
-
+            setupScreenCapture()
+            
         } catch (e: Exception) {
-            Log.e(TAG, "executeMove error: ${e.message}")
-            e.printStackTrace()
-            return false
+            Log.e(TAG, "Error starting screen stream service", e)
+            stopSelf()
+        }
+
+        return START_STICKY
+    }
+
+    private fun setupScreenCapture() {
+        try {
+            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val metrics = DisplayMetrics()
+
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(metrics)
+
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+            val density = metrics.densityDpi
+
+            Log.d(TAG, "Display metrics: ${width}x${height} density=$density")
+
+            // Initialize screen encoder with H.264
+            screenEncoder = ScreenEncoder(width, height, this)
+            
+            // Initialize WebRTC manager
+            webRTCManager = WebRTCManager(this, screenEncoder)
+            
+            // Create virtual display with encoder's input surface
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "ScreenStream",
+                width,
+                height,
+                density,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                screenEncoder.getInputSurface(),
+                null,
+                null
+            )
+
+            Log.d(TAG, "Virtual display created and streaming started")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Screen capture setup failed", e)
+            stopSelf()
         }
     }
-    
-    private fun squareToScreenCoordinates(square: String): Pair<Float, Float>? {
-        if (square.length != 2) return null
-        
-        val file = square[0] // a-h
-        val rank = square[1] // 1-8
-        
-        // Check orientation from SharedPreferences
-        val bottomColor = Prefs.getString(this, "bottom_color", "White")
-        
-        val col: Int
-        val row: Int
-        
-        if (bottomColor == "White") {
-            // Normal orientation: a-h left to right, 1-8 bottom to top
-            col = file - 'a' // 0-7
-            row = 7 - (rank - '1') // 0-7 (inverted)
-        } else {
-            // Reversed orientation: h-a left to right, 8-1 bottom to top
-            col = 'h' - file // 0-7
-            row = rank - '1' // 0-7
-        }
-        
-        // Calculate center of the square
-        val x = BOARD_LEFT + (col * CELL_WIDTH) + (CELL_WIDTH / 2)
-        val y = BOARD_TOP + (row * CELL_HEIGHT) + (CELL_HEIGHT / 2)
-        
-        Log.d(TAG, "Square $square -> Screen coordinates ($x, $y)")
-        
-        return Pair(x.toFloat(), y.toFloat())
-    }
-    
-    private suspend fun performTap(x: Float, y: Float): Boolean = withContext(Dispatchers.Main) {
-        var attempt = 0
-        while (attempt < 3) {
-            attempt++
-            try {
-                val path = Path().apply {
-                    moveTo(x, y)
-                }
 
-                val gestureBuilder = GestureDescription.Builder()
-                gestureBuilder.addStroke(
-                    GestureDescription.StrokeDescription(path, 0, 50)
-                )
-
-                val gesture = gestureBuilder.build()
-
-                val result = suspendCancellableCoroutine<Boolean> { continuation ->
-                    dispatchGesture(gesture, object : GestureResultCallback() {
-
-                        override fun onCompleted(gestureDescription: GestureDescription?) {
-                            Log.d(TAG, "Tap success at ($x,$y) | attempt $attempt")
-                            continuation.resume(true) {}
-                        }
-
-                        override fun onCancelled(gestureDescription: GestureDescription?) {
-                            Log.e(TAG, "Tap cancelled at ($x,$y) | attempt $attempt")
-                            continuation.resume(false) {}
-                        }
-
-                    }, null)
-                }
-
-                if (result) return@withContext true   // success → exit
-
-                Log.e(TAG, "Tap failed attempt $attempt at ($x,$y)")
-
-                delay(150) // retry delay
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Tap exception attempt $attempt: ${e.message}")
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Screen Stream Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply { 
+                description = "Streaming screen in real-time"
+                setShowBadge(false) 
             }
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
         }
-
-        Log.e(TAG, "Tap failed permanently after 3 attempts at ($x,$y)")
-        return@withContext false
     }
-    
+
+    private fun createNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Screen Streaming")
+            .setContentText("Screen is being streamed via WebRTC")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        stopPolling()
-        serviceInstance = null
-        Log.d(TAG, "Chess Move Accessibility Service Destroyed")
+        Log.d(TAG, "ScreenStreamService destroying")
+
+        virtualDisplay?.release()
+        virtualDisplay = null
+        
+        screenEncoder.release()
+        webRTCManager.release()
+        
+        mediaProjection?.stop()
+        mediaProjection = null
+
+        Log.d(TAG, "ScreenStreamService destroyed")
     }
-    
-    override fun onUnbind(intent: Intent?): Boolean {
-        // Don't clear instance on unbind, only on actual destroy
-        Log.d(TAG, "Service unbound but instance preserved")
-        return false
+
+    companion object {
+        private const val NOTIFICATION_ID = 1
+        private const val CHANNEL_ID = "screen_stream_channel"
     }
 }
