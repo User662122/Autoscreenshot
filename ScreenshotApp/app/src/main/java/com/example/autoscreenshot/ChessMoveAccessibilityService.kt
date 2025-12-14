@@ -14,6 +14,8 @@ import java.io.IOException
 class ChessMoveAccessibilityService : AccessibilityService() {
     
     companion object {
+        private var serviceInstance: ChessMoveAccessibilityService? = null
+        
         fun isAccessibilityServiceEnabled(context: android.content.Context): Boolean {
             val service = "${context.packageName}/${ChessMoveAccessibilityService::class.java.name}"
             val enabledServices = Settings.Secure.getString(
@@ -28,10 +30,28 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
             context.startActivity(intent)
         }
+        
+        fun startMovePolling(context: android.content.Context): Boolean {
+            return if (serviceInstance != null) {
+                serviceInstance?.startPolling()
+                true
+            } else {
+                false
+            }
+        }
+        
+        fun stopMovePolling() {
+            serviceInstance?.stopPolling()
+        }
+        
+        fun isServiceConnected(): Boolean {
+            return serviceInstance != null
+        }
     }
     
     private val client = OkHttpClient()
     private var isRunning = false
+    private var pollingJob: Job? = null
     private val TAG = "ChessMoveAccessibility"
     
     // Chess board coordinates (based on your crop: x1=11, y1=505, x2=709, y2=1201)
@@ -47,9 +67,8 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     override fun onServiceConnected() {
         super.onServiceConnected()
+        serviceInstance = this
         Log.d(TAG, "Chess Move Accessibility Service Connected")
-        isRunning = true
-        startPollingForMoves()
     }
     
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -60,8 +79,16 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         Log.d(TAG, "Service interrupted")
     }
     
-    private fun startPollingForMoves() {
-        CoroutineManager.launchIO {
+    fun startPolling() {
+        if (isRunning) {
+            Log.d(TAG, "Polling already running")
+            return
+        }
+        
+        isRunning = true
+        Log.d(TAG, "Starting move polling...")
+        
+        pollingJob = CoroutineManager.launchIO {
             // Wait for /start to be called first
             while (isRunning) {
                 val bottomColor = Prefs.getString(this@ChessMoveAccessibilityService, "bottom_color", "")
@@ -78,15 +105,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             // Now start polling SharedPreferences for moves
             while (isRunning) {
                 try {
-                    // Check if screenshot service is still running
-                    val isServiceActive = Prefs.getString(this@ChessMoveAccessibilityService, "screenshot_service_active", "false")
-                    
-                    if (isServiceActive != "true") {
-                        Log.d(TAG, "Screenshot service stopped. Pausing move polling...")
-                        delay(3000)
-                        continue
-                    }
-                    
                     // Read pending move from SharedPreferences (set by ScreenshotService)
                     val move = fetchMoveFromSharedPreferences()
                     if (move != null && move.isNotEmpty()) {
@@ -119,7 +137,21 @@ class ChessMoveAccessibilityService : AccessibilityService() {
                     delay(5000) // Wait longer on error
                 }
             }
+            
+            Log.d(TAG, "Move polling stopped")
         }
+    }
+    
+    fun stopPolling() {
+        if (!isRunning) {
+            Log.d(TAG, "Polling already stopped")
+            return
+        }
+        
+        isRunning = false
+        pollingJob?.cancel()
+        pollingJob = null
+        Log.d(TAG, "Stopping move polling...")
     }
     
     private fun fetchMoveFromSharedPreferences(): String? {
@@ -131,7 +163,6 @@ class ChessMoveAccessibilityService : AccessibilityService() {
             return pendingMove
         }
         
-        Log.d(TAG, "No pending move in SharedPreferences")
         return null
     }
     
@@ -261,8 +292,8 @@ class ChessMoveAccessibilityService : AccessibilityService() {
     
     override fun onDestroy() {
         super.onDestroy()
-        isRunning = false
-        CoroutineManager.cancelAll()
+        stopPolling()
+        serviceInstance = null
         Log.d(TAG, "Chess Move Accessibility Service Destroyed")
     }
 }
