@@ -80,26 +80,17 @@ class ScreenshotService : Service() {
                 delay(15000) // Initial 15-second delay
                 while (isActive && isCapturing) {
                     try {
-                        // Check if there's a pending AI move that hasn't been executed yet
-                        val pendingMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
+                        // Check if a move is currently being executed
+                        val isMoveExecuting = Prefs.isMoveExecuting(this@ScreenshotService)
                         
-                        if (pendingMove.isNotEmpty()) {
-                            Log.d(TAG, "Pausing screenshot service - waiting for AI move execution: $pendingMove")
-                            
-                            // Wait until the move is executed (ChessMoveAccessibilityService clears it)
-                            while (isActive && isCapturing) {
-                                val currentMove = Prefs.getString(this@ScreenshotService, "pending_ai_move", "")
-                                if (currentMove.isEmpty()) {
-                                    Log.d(TAG, "AI move executed, resuming screenshot service")
-                                    break
-                                }
-                                delay(500) // Check every 500ms
-                            }
-                            
-                            // Add a small delay after move execution before taking next screenshot
-                            delay(2000)
+                        if (isMoveExecuting) {
+                            // Pause screenshot capture while move is executing
+                            Log.d(TAG, "Pausing screenshot capture - move is executing...")
+                            delay(500) // Check again in 500ms
+                            continue
                         }
                         
+                        // Capture screenshot only when no move is executing
                         captureScreenshot()
                         delay(3000) // Wait 3 seconds between captures
                     } catch (e: Exception) {
@@ -122,78 +113,80 @@ class ScreenshotService : Service() {
     }
 
     private fun setupVirtualDisplay() {
-    try {
-        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val metrics = DisplayMetrics()
-
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(metrics)
-
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
-
-        Log.d(TAG, "Display metrics: ${width}x$height density=$density")
-
-        imageReader = ImageReader.newInstance(
-            width,
-            height,
-            PixelFormat.RGBA_8888,
-            2
-        )
-
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "ScreenCapture",
-            width,
-            height,
-            density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface,
-            null,
-            null
-        )
-
-        Log.d(TAG, "Virtual display created successfully")
-
-    } catch (e: Exception) {
-        Log.e(TAG, "Virtual display setup failed", e)
-        stopSelf()
-    }
-}
-    private suspend fun captureScreenshot() {
-    val image = imageReader?.acquireLatestImage()
-    if (image != null) {
         try {
-            var bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
-            if (bitmap != null) {
+            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val metrics = DisplayMetrics()
 
-                // Resize if not 720x1600
-                val targetWidth = 720
-                val targetHeight = 1600
-                if (bitmap.width != targetWidth || bitmap.height != targetHeight) {
-                    val resizedBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
-                    bitmap.recycle() // original bitmap recycle kar do
-                    bitmap = resizedBitmap
-                    Log.d(TAG, "Bitmap resized to ${targetWidth}x$targetHeight")
-                }
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(metrics)
 
-                val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 431, 712, 1132) }
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+            val density = metrics.densityDpi
 
-                // Extract 64 pieces and pass to TFLiteModelManager
-                val pieces = extract64Pieces(cropped)
+            Log.d(TAG, "Display metrics: ${width}x$height density=$density")
 
-                // Recycle bitmaps we no longer need
-                cropped.recycle()
-                bitmap.recycle()
+            imageReader = ImageReader.newInstance(
+                width,
+                height,
+                PixelFormat.RGBA_8888,
+                2
+            )
 
-                // Pass pieces to TFLiteModelManager for processing
-                modelManager.processChessBoard(pieces, this@ScreenshotService)
-            }
-        } finally {
-            image.close()
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "ScreenCapture",
+                width,
+                height,
+                density,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader!!.surface,
+                null,
+                null
+            )
+
+            Log.d(TAG, "Virtual display created successfully")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Virtual display setup failed", e)
+            stopSelf()
         }
     }
-}
+
+    private suspend fun captureScreenshot() {
+        val image = imageReader?.acquireLatestImage()
+        if (image != null) {
+            try {
+                var bitmap = withContext(Dispatchers.Default) { imageToBitmap(image) }
+                if (bitmap != null) {
+
+                    // Resize if not 720x1600
+                    val targetWidth = 720
+                    val targetHeight = 1600
+                    if (bitmap.width != targetWidth || bitmap.height != targetHeight) {
+                        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+                        bitmap.recycle()
+                        bitmap = resizedBitmap
+                        Log.d(TAG, "Bitmap resized to ${targetWidth}x$targetHeight")
+                    }
+
+                    val cropped = withContext(Dispatchers.Default) { cropBitmap(bitmap, 11, 431, 712, 1132) }
+
+                    // Extract 64 pieces and pass to TFLiteModelManager
+                    val pieces = extract64Pieces(cropped)
+
+                    // Recycle bitmaps we no longer need
+                    cropped.recycle()
+                    bitmap.recycle()
+
+                    // Pass pieces to TFLiteModelManager for processing
+                    modelManager.processChessBoard(pieces, this@ScreenshotService)
+                }
+            } finally {
+                image.close()
+            }
+        }
+    }
+
     private fun imageToBitmap(image: Image): Bitmap? {
         return try {
             val planes = image.planes
