@@ -57,6 +57,10 @@ class WebSocketSignalingServer(
                     "offer" -> onOfferReceived?.invoke(it)
                     "answer" -> onAnswerReceived?.invoke(it)
                     "ice-candidate" -> onIceCandidateReceived?.invoke(it)
+                    else -> {
+                        // Handle unknown type or do nothing
+                        Log.d(TAG, "Unknown message type: $type")
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error parsing message", e)
@@ -77,7 +81,7 @@ class WebSocketSignalingServer(
         connectionLostTimeout = 100
     }
 
-    fun broadcast(message: String) {
+    override fun broadcast(message: String) {
         clients.forEach { client ->
             try {
                 client.send(message)
@@ -349,8 +353,8 @@ class WebSocketSignalingServer(
                 const stream = event.streams[0];
                 const videoTrack = stream.getVideoTracks()[0];
                 if (videoTrack) {
-                    const settings = videoTrack.getSettings();
-                    streamInfo.innerHTML = `<strong>Stream:</strong> ${settings.width}x${settings.height} @ ${settings.frameRate}fps`;
+                    const videoSettings = videoTrack.getSettings();
+                    streamInfo.innerHTML = `<strong>Stream:</strong> ${videoSettings.width}x${videoSettings.height} @ ${videoSettings.frameRate}fps`;
                 }
             };
             
