@@ -296,4 +296,10 @@ class ChessMoveAccessibilityService : AccessibilityService() {
         serviceInstance = null
         Log.d(TAG, "Chess Move Accessibility Service Destroyed")
     }
+    
+    override fun onUnbind(intent: Intent?): Boolean {
+        // Don't clear instance on unbind, only on actual destroy
+        Log.d(TAG, "Service unbound but instance preserved")
+        return false
+    }
 }
