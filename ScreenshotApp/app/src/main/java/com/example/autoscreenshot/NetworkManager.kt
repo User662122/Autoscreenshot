@@ -3,8 +3,6 @@ package com.example.screenstream
 import android.content.Context
 import android.media.MediaCodec
 import android.util.Log
-import io.socket.client.IO
-import io.socket.client.Socket
 import org.json.JSONObject
 import org.webrtc.*
 import java.nio.ByteBuffer
@@ -15,16 +13,16 @@ class WebRTCManager(
 ) {
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
-    private var socket: Socket? = null
+    private var webSocketServer: WebSocketSignalingServer? = null
     
     private val TAG = "WebRTCManager"
     
-    // Signaling server URL (replace with your server)
-    private val SIGNALING_SERVER_URL = "http://YOUR_SERVER_IP:8080"
+    // Built-in WebSocket server port
+    private val WEBSOCKET_PORT = 8080
 
     init {
         initializeWebRTC()
-        setupSignaling()
+        startSignalingServer()
         setupEncoderCallback()
     }
 
@@ -50,48 +48,36 @@ class WebRTCManager(
         }
     }
 
-    private fun setupSignaling() {
+    private fun startSignalingServer() {
         try {
-            socket = IO.socket(SIGNALING_SERVER_URL)
+            webSocketServer = WebSocketSignalingServer(WEBSOCKET_PORT, context)
+            webSocketServer?.start()
             
-            socket?.on(Socket.EVENT_CONNECT) {
-                Log.d(TAG, "Connected to signaling server")
+            // Set up message handlers
+            webSocketServer?.onOfferReceived = { offer ->
+                Log.d(TAG, "Received offer from web client")
+                handleOffer(offer)
+            }
+            
+            webSocketServer?.onAnswerReceived = { answer ->
+                Log.d(TAG, "Received answer from web client")
+                handleAnswer(answer)
+            }
+            
+            webSocketServer?.onIceCandidateReceived = { candidate ->
+                Log.d(TAG, "Received ICE candidate from web client")
+                handleIceCandidate(candidate)
+            }
+            
+            webSocketServer?.onClientConnected = {
+                Log.d(TAG, "Web client connected, creating offer")
                 createOffer()
             }
             
-            socket?.on("answer") { args ->
-                val data = args[0] as JSONObject
-                val sdp = SessionDescription(
-                    SessionDescription.Type.ANSWER,
-                    data.getString("sdp")
-                )
-                peerConnection?.setRemoteDescription(object : SdpObserver {
-                    override fun onCreateSuccess(p0: SessionDescription?) {}
-                    override fun onSetSuccess() {
-                        Log.d(TAG, "Remote description set")
-                    }
-                    override fun onCreateFailure(p0: String?) {}
-                    override fun onSetFailure(p0: String?) {
-                        Log.e(TAG, "Failed to set remote description: $p0")
-                    }
-                }, sdp)
-            }
-            
-            socket?.on("ice-candidate") { args ->
-                val data = args[0] as JSONObject
-                val candidate = IceCandidate(
-                    data.getString("sdpMid"),
-                    data.getInt("sdpMLineIndex"),
-                    data.getString("candidate")
-                )
-                peerConnection?.addIceCandidate(candidate)
-                Log.d(TAG, "Added ICE candidate")
-            }
-            
-            socket?.connect()
+            Log.d(TAG, "WebSocket signaling server started on port $WEBSOCKET_PORT")
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error setting up signaling", e)
+            Log.e(TAG, "Error starting signaling server", e)
         }
     }
 
@@ -110,12 +96,13 @@ class WebRTCManager(
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
                     val json = JSONObject().apply {
+                        put("type", "ice-candidate")
                         put("sdpMid", it.sdpMid)
                         put("sdpMLineIndex", it.sdpMLineIndex)
                         put("candidate", it.sdp)
                     }
-                    socket?.emit("ice-candidate", json)
-                    Log.d(TAG, "ICE candidate sent")
+                    webSocketServer?.broadcast(json.toString())
+                    Log.d(TAG, "ICE candidate sent to web client")
                 }
             }
             
@@ -157,11 +144,11 @@ class WebRTCManager(
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
                         val json = JSONObject().apply {
-                            put("type", sdp?.type?.canonicalForm())
+                            put("type", "offer")
                             put("sdp", sdp?.description)
                         }
-                        socket?.emit("offer", json)
-                        Log.d(TAG, "Offer sent")
+                        webSocketServer?.broadcast(json.toString())
+                        Log.d(TAG, "Offer sent to web client")
                     }
                     override fun onCreateFailure(p0: String?) {}
                     override fun onSetFailure(p0: String?) {}
@@ -189,12 +176,56 @@ class WebRTCManager(
         }
     }
 
+    private fun handleOffer(offerData: String) {
+        // Not needed - Android is the broadcaster
+    }
+    
+    private fun handleAnswer(answerData: String) {
+        try {
+            val data = JSONObject(answerData)
+            val sdp = SessionDescription(
+                SessionDescription.Type.ANSWER,
+                data.getString("sdp")
+            )
+            peerConnection?.setRemoteDescription(object : SdpObserver {
+                override fun onCreateSuccess(p0: SessionDescription?) {}
+                override fun onSetSuccess() {
+                    Log.d(TAG, "Remote description set successfully")
+                }
+                override fun onCreateFailure(p0: String?) {}
+                override fun onSetFailure(p0: String?) {
+                    Log.e(TAG, "Failed to set remote description: $p0")
+                }
+            }, sdp)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling answer", e)
+        }
+    }
+    
+    private fun handleIceCandidate(candidateData: String) {
+        try {
+            val data = JSONObject(candidateData)
+            val candidate = IceCandidate(
+                data.getString("sdpMid"),
+                data.getInt("sdpMLineIndex"),
+                data.getString("candidate")
+            )
+            peerConnection?.addIceCandidate(candidate)
+            Log.d(TAG, "Added ICE candidate from web client")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling ICE candidate", e)
+        }
+    }
+
+    fun getServerUrl(): String {
+        return "http://YOUR_DEVICE_IP:$WEBSOCKET_PORT"
+    }
+
     fun release() {
         Log.d(TAG, "Releasing WebRTC")
         
-        socket?.disconnect()
-        socket?.close()
-        socket = null
+        webSocketServer?.stop()
+        webSocketServer = null
         
         peerConnection?.close()
         peerConnection?.dispose()
