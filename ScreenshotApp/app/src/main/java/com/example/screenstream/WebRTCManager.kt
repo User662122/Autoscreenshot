@@ -52,28 +52,44 @@ class WebRTCManager(
     private fun createPeer() {
         val ice = listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         peerConnection = factory.createPeerConnection(
-            PeerConnection.RTCConfiguration(ice),
-            object : PeerConnection.Observer {
-                override fun onIceCandidate(c: IceCandidate) {
-                    server.broadcast(JSONObject().apply {
-                        put("type", "ice-candidate")
-                        put("sdpMid", c.sdpMid)
-                        put("sdpMLineIndex", c.sdpMLineIndex)
-                        put("candidate", c.sdp)
-                    }.toString())
-                }
-                override fun onTrack(r: RtpTransceiver?) {}
-                override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
-                override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
-                override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
-                override fun onAddStream(p0: MediaStream?) {}
-                override fun onRemoveStream(p0: MediaStream?) {}
-                override fun onDataChannel(p0: DataChannel?) {}
-                override fun onRenegotiationNeeded() {}
-                override fun onConnectionChange(p0: PeerConnection.PeerConnectionState?) {}
-            }
-        )
+    PeerConnection.RTCConfiguration(ice),
+    object : PeerConnection.Observer {
+
+        override fun onIceCandidate(c: IceCandidate) {
+            server.broadcast(JSONObject().apply {
+                put("type", "ice-candidate")
+                put("sdpMid", c.sdpMid)
+                put("sdpMLineIndex", c.sdpMLineIndex)
+                put("candidate", c.sdp)
+            }.toString())
+        }
+
+        override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {}
+
+        override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}
+
+        override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+
+        override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
+
+        override fun onSignalingChange(state: PeerConnection.SignalingState) {}
+
+        override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {}
+
+        override fun onAddStream(stream: MediaStream) {}
+
+        override fun onRemoveStream(stream: MediaStream) {}
+
+        override fun onDataChannel(channel: DataChannel) {}
+
+        override fun onRenegotiationNeeded() {}
+
+        override fun onAddTrack(
+            receiver: RtpReceiver,
+            streams: Array<MediaStream>
+        ) {}
     }
+)
 
     private fun startCapture() {
         surfaceHelper = SurfaceTextureHelper.create("Screen", eglBase.eglBaseContext)
