@@ -73,4 +73,10 @@ dependencies {
     
     // NanoHTTPD for HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    
+    // OkHttp for ngrok API calls
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    
+    // JSON parsing
+    implementation("org.json:json:20231013")
 }
