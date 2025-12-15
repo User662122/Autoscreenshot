@@ -6,10 +6,7 @@ import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
 import org.json.JSONObject
-import java.io.IOException
-import java.io.OutputStream
 import java.net.InetSocketAddress
-import java.nio.charset.StandardCharsets
 
 class WebSocketSignalingServer(
     port: Int,
@@ -76,20 +73,20 @@ class WebSocketSignalingServer(
         
         function updateStatus(msg, type = 'waiting') {
             status.textContent = msg;
-            status.className = `status ${type}`;
+            status.className = 'status ' + type;
         }
         
         connectBtn.onclick = function() {
             const ip = window.location.hostname;
-            ws = new WebSocket(`ws://${ip}:${window.location.port || 8080}`);
+            ws = new WebSocket('ws://' + ip + ':8080');
             
-            ws.onopen = () => {
+            ws.onopen = function() {
                 updateStatus('WebSocket Connected', 'connected');
                 connectBtn.disabled = true;
                 startBtn.disabled = false;
             };
             
-            ws.onmessage = async (event) => {
+            ws.onmessage = async function(event) {
                 try {
                     const data = JSON.parse(event.data);
                     console.log('Received:', data.type);
@@ -97,12 +94,12 @@ class WebSocketSignalingServer(
                     if (data.type === 'offer') {
                         if (!peerConnection) {
                             peerConnection = new RTCPeerConnection(config);
-                            peerConnection.ontrack = (e) => {
+                            peerConnection.ontrack = function(e) {
                                 video.srcObject = e.streams[0];
                                 updateStatus('Streaming Active', 'connected');
                                 stopBtn.disabled = false;
                             };
-                            peerConnection.onicecandidate = (e) => {
+                            peerConnection.onicecandidate = function(e) {
                                 if (e.candidate && ws.readyState === WebSocket.OPEN) {
                                     ws.send(JSON.stringify({
                                         type: 'ice-candidate',
@@ -142,12 +139,12 @@ class WebSocketSignalingServer(
                 }
             };
             
-            ws.onerror = (error) => {
+            ws.onerror = function(error) {
                 updateStatus('Connection Error', 'error');
                 console.error('WebSocket error:', error);
             };
             
-            ws.onclose = () => {
+            ws.onclose = function() {
                 updateStatus('Disconnected', 'waiting');
                 connectBtn.disabled = false;
                 startBtn.disabled = true;
@@ -177,7 +174,7 @@ class WebSocketSignalingServer(
         };
         
         // Auto-connect
-        setTimeout(() => {
+        setTimeout(function() {
             if (window.location.hostname !== 'localhost') {
                 connectBtn.click();
             }
