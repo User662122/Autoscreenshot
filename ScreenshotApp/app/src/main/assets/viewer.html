@@ -4,14 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Screen Stream Viewer</title>
-    <script src="/socket.io/socket.io.js"></script>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -22,7 +21,7 @@
             justify-content: center;
             padding: 20px;
         }
-        
+
         .container {
             background: white;
             border-radius: 20px;
@@ -31,13 +30,13 @@
             max-width: 1200px;
             width: 100%;
         }
-        
+
         h1 {
             color: #333;
             margin-bottom: 10px;
             text-align: center;
         }
-        
+
         .status {
             text-align: center;
             padding: 15px;
@@ -45,22 +44,27 @@
             margin-bottom: 20px;
             font-weight: 600;
         }
-        
+
         .status.waiting {
             background: #fff3cd;
             color: #856404;
         }
-        
+
         .status.connected {
             background: #d4edda;
             color: #155724;
         }
-        
+
+        .status.streaming {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
         .status.error {
             background: #f8d7da;
             color: #721c24;
         }
-        
+
         .video-container {
             position: relative;
             background: #000;
@@ -70,20 +74,21 @@
             max-height: 80vh;
             margin: 0 auto;
         }
-        
+
         video {
             width: 100%;
             height: 100%;
             object-fit: contain;
         }
-        
+
         .controls {
             display: flex;
             gap: 10px;
             justify-content: center;
             margin-top: 20px;
+            flex-wrap: wrap;
         }
-        
+
         button {
             padding: 12px 24px;
             border: none;
@@ -92,32 +97,70 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s;
+            min-width: 120px;
         }
-        
+
         button.primary {
             background: #667eea;
             color: white;
         }
-        
-        button.primary:hover {
+
+        button.primary:hover:not(:disabled) {
             background: #5568d3;
             transform: translateY(-2px);
         }
-        
+
+        button.success {
+            background: #28a745;
+            color: white;
+        }
+
+        button.success:hover:not(:disabled) {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+
         button.danger {
             background: #dc3545;
             color: white;
         }
-        
-        button.danger:hover {
+
+        button.danger:hover:not(:disabled) {
             background: #c82333;
+            transform: translateY(-2px);
         }
-        
+
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
-        
+
+        .connection-panel {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
         .info {
             margin-top: 20px;
             padding: 15px;
@@ -126,154 +169,427 @@
             font-size: 14px;
             color: #666;
         }
-        
+
         .info p {
             margin: 5px 0;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #eee;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📱 Screen Stream Viewer</h1>
-        
+        <h1>📱 Android Screen Stream Viewer</h1>
+
         <div id="status" class="status waiting">
-            Waiting for stream...
+            Enter Android device IP address to connect
         </div>
-        
+
+        <div class="connection-panel">
+            <div class="input-group">
+                <input type="text" id="ipInput" placeholder="Enter device IP (e.g., 192.168.1.100)" value="">
+                <button id="connectBtn" class="primary">Connect</button>
+            </div>
+            <p style="text-align: center; color: #666; font-size: 14px;">
+                Find IP in Android app after starting stream
+            </p>
+        </div>
+
         <div class="video-container">
             <video id="remoteVideo" autoplay playsinline muted></video>
         </div>
-        
+
         <div class="controls">
-            <button id="connectBtn" class="primary">Connect</button>
-            <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+            <button id="startStreamBtn" class="success" disabled>Start Stream</button>
+            <button id="stopStreamBtn" class="danger" disabled>Stop Stream</button>
         </div>
-        
+
         <div class="info">
             <p><strong>Instructions:</strong></p>
             <p>1. Start screen streaming on your Android device</p>
-            <p>2. Click "Connect" button above</p>
-            <p>3. The stream will appear automatically</p>
-            <p id="streamInfo"></p>
+            <p>2. Note the IP address shown in the Android app</p>
+            <p>3. Enter the IP address above and click "Connect"</p>
+            <p>4. Click "Start Stream" to begin viewing</p>
+            
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-value" id="streamStatus">Offline</div>
+                    <div class="stat-label">Status</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="resolution">-</div>
+                    <div class="stat-label">Resolution</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="fps">-</div>
+                    <div class="stat-label">FPS</div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
-        const socket = io();
-        let peerConnection = null;
+        // DOM Elements
         const remoteVideo = document.getElementById('remoteVideo');
         const status = document.getElementById('status');
         const connectBtn = document.getElementById('connectBtn');
-        const disconnectBtn = document.getElementById('disconnectBtn');
-        const streamInfo = document.getElementById('streamInfo');
-        
-        const config = {
+        const startStreamBtn = document.getElementById('startStreamBtn');
+        const stopStreamBtn = document.getElementById('stopStreamBtn');
+        const ipInput = document.getElementById('ipInput');
+        const streamStatus = document.getElementById('streamStatus');
+        const resolution = document.getElementById('resolution');
+        const fps = document.getElementById('fps');
+
+        // Global variables
+        let ws = null;
+        let peerConnection = null;
+        let streamActive = false;
+        let connectionAttempts = 0;
+        const MAX_ATTEMPTS = 3;
+
+        // WebRTC Configuration
+        const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ],
+            iceCandidatePoolSize: 10
         };
-        
+
+        // Update status display
         function updateStatus(message, type = 'waiting') {
             status.textContent = message;
             status.className = `status ${type}`;
+            streamStatus.textContent = type === 'streaming' ? 'Streaming' : 'Offline';
         }
-        
+
+        // Connect to WebSocket server
+        function connectWebSocket(ipAddress) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+
+            const wsUrl = `ws://${ipAddress}:8080`;
+            console.log('Connecting to:', wsUrl);
+            
+            updateStatus(`Connecting to ${ipAddress}...`, 'waiting');
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected successfully');
+                connectionAttempts = 0;
+                updateStatus('Connected to Android device', 'connected');
+                connectBtn.disabled = true;
+                connectBtn.textContent = 'Connected';
+                startStreamBtn.disabled = false;
+                ipInput.disabled = true;
+                
+                // Send initial connection message
+                ws.send(JSON.stringify({ type: 'client-connected' }));
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received message:', data.type);
+                    handleSignalingMessage(data);
+                } catch (error) {
+                    console.error('Error parsing message:', error);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                if (connectionAttempts < MAX_ATTEMPTS) {
+                    connectionAttempts++;
+                    updateStatus(`Connection failed, retrying (${connectionAttempts}/${MAX_ATTEMPTS})...`, 'error');
+                    setTimeout(() => connectWebSocket(ipAddress), 1000);
+                } else {
+                    updateStatus('Failed to connect. Check IP and ensure Android app is running', 'error');
+                    resetConnection();
+                }
+            };
+            
+            ws.onclose = (event) => {
+                console.log('WebSocket closed:', event.code, event.reason);
+                if (event.code !== 1000) {
+                    updateStatus('Connection lost. Please reconnect.', 'error');
+                    resetConnection();
+                }
+            };
+        }
+
+        // Handle signaling messages
+        function handleSignalingMessage(data) {
+            switch (data.type) {
+                case 'offer':
+                    handleOffer(data);
+                    break;
+                case 'answer':
+                    handleAnswer(data);
+                    break;
+                case 'ice-candidate':
+                    handleIceCandidate(data);
+                    break;
+                case 'stream-started':
+                    updateStatus('Android screen streaming started', 'streaming');
+                    break;
+                case 'stream-stopped':
+                    updateStatus('Android screen streaming stopped', 'connected');
+                    stopStream();
+                    break;
+            }
+        }
+
+        // Create WebRTC peer connection
         function createPeerConnection() {
-            peerConnection = new RTCPeerConnection(config);
+            if (peerConnection) {
+                peerConnection.close();
+            }
+
+            peerConnection = new RTCPeerConnection(rtcConfig);
             
             peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', {
+                if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
                         sdpMid: event.candidate.sdpMid,
                         sdpMLineIndex: event.candidate.sdpMLineIndex,
                         candidate: event.candidate.candidate
-                    });
-                    console.log('ICE candidate sent');
+                    }));
                 }
             };
             
             peerConnection.ontrack = (event) => {
-                console.log('Remote track received:', event.track.kind);
+                console.log('Received remote track:', event.track.kind);
                 remoteVideo.srcObject = event.streams[0];
-                updateStatus('✓ Stream connected!', 'connected');
+                streamActive = true;
                 
+                // Update UI
+                startStreamBtn.disabled = true;
+                stopStreamBtn.disabled = false;
+                updateStatus('✓ Screen stream active!', 'streaming');
+                
+                // Update stats
                 const stream = event.streams[0];
                 const videoTrack = stream.getVideoTracks()[0];
                 if (videoTrack) {
                     const settings = videoTrack.getSettings();
-                    streamInfo.innerHTML = `<strong>Stream:</strong> ${settings.width}x${settings.height} @ ${settings.frameRate}fps`;
+                    resolution.textContent = `${settings.width || '?'}x${settings.height || '?'}`;
+                    fps.textContent = `${settings.frameRate || '?'} fps`;
                 }
             };
             
             peerConnection.onconnectionstatechange = () => {
                 console.log('Connection state:', peerConnection.connectionState);
-                if (peerConnection.connectionState === 'failed') {
-                    updateStatus('Connection failed. Please try again.', 'error');
+                switch (peerConnection.connectionState) {
+                    case 'connected':
+                        updateStatus('WebRTC connection established', 'streaming');
+                        break;
+                    case 'disconnected':
+                    case 'failed':
+                        updateStatus('Connection interrupted', 'error');
+                        stopStream();
+                        break;
+                    case 'closed':
+                        console.log('Peer connection closed');
+                        break;
                 }
             };
+            
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE connection state:', peerConnection.iceConnectionState);
+            };
         }
-        
-        socket.on('connect', () => {
-            console.log('Connected to signaling server');
-            updateStatus('Connected to server. Waiting for stream...', 'waiting');
-        });
-        
-        socket.on('offer', async (data) => {
-            console.log('Received offer');
-            updateStatus('Stream found! Connecting...', 'waiting');
+
+        // Handle offer from Android
+        async function handleOffer(offerData) {
+            console.log('Received offer from Android');
             
-            createPeerConnection();
-            
-            await peerConnection.setRemoteDescription(new RTCSessionDescription({
-                type: 'offer',
-                sdp: data.sdp
-            }));
-            
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            
-            socket.emit('answer', {
-                type: 'answer',
-                sdp: answer.sdp,
-                to: data.from
-            });
-            
-            console.log('Answer sent');
-        });
-        
-        socket.on('ice-candidate', async (data) => {
-            if (peerConnection) {
-                await peerConnection.addIceCandidate(new RTCIceCandidate({
-                    sdpMid: data.sdpMid,
-                    sdpMLineIndex: data.sdpMLineIndex,
-                    candidate: data.candidate
-                }));
-                console.log('ICE candidate added');
+            if (!peerConnection) {
+                createPeerConnection();
             }
-        });
-        
-        connectBtn.onclick = () => {
-            updateStatus('Waiting for stream from Android device...', 'waiting');
-            connectBtn.disabled = true;
-            disconnectBtn.disabled = false;
-        };
-        
-        disconnectBtn.onclick = () => {
+            
+            try {
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription({
+                        type: 'offer',
+                        sdp: offerData.sdp
+                    })
+                );
+                
+                console.log('Remote description set successfully');
+                
+                // Create and send answer
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                ws.send(JSON.stringify({
+                    type: 'answer',
+                    sdp: answer.sdp
+                }));
+                
+                console.log('Answer sent to Android');
+            } catch (error) {
+                console.error('Error handling offer:', error);
+                updateStatus('Error setting up stream', 'error');
+            }
+        }
+
+        // Handle answer (shouldn't be needed for viewer)
+        async function handleAnswer(answerData) {
+            console.log('Received answer:', answerData);
+        }
+
+        // Handle ICE candidate
+        async function handleIceCandidate(candidateData) {
+            if (peerConnection && candidateData.candidate) {
+                try {
+                    await peerConnection.addIceCandidate(
+                        new RTCIceCandidate({
+                            sdpMid: candidateData.sdpMid,
+                            sdpMLineIndex: candidateData.sdpMLineIndex,
+                            candidate: candidateData.candidate
+                        })
+                    );
+                } catch (error) {
+                    console.error('Error adding ICE candidate:', error);
+                }
+            }
+        }
+
+        // Start streaming
+        function startStream() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                updateStatus('Not connected to Android device', 'error');
+                return;
+            }
+            
+            updateStatus('Requesting screen stream...', 'waiting');
+            
+            // Request stream from Android
+            ws.send(JSON.stringify({
+                type: 'request-stream'
+            }));
+        }
+
+        // Stop streaming
+        function stopStream() {
             if (peerConnection) {
                 peerConnection.close();
                 peerConnection = null;
             }
-            remoteVideo.srcObject = null;
-            updateStatus('Disconnected', 'waiting');
+            
+            if (remoteVideo.srcObject) {
+                remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+                remoteVideo.srcObject = null;
+            }
+            
+            streamActive = false;
+            startStreamBtn.disabled = false;
+            stopStreamBtn.disabled = true;
+            resolution.textContent = '-';
+            fps.textContent = '-';
+            
+            // Notify Android to stop if still connected
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stop-stream' }));
+            }
+        }
+
+        // Reset connection
+        function resetConnection() {
+            stopStream();
+            
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            
             connectBtn.disabled = false;
-            disconnectBtn.disabled = true;
-            streamInfo.innerHTML = '';
-        };
-        
-        socket.on('disconnect', () => {
-            updateStatus('Disconnected from server', 'error');
+            connectBtn.textContent = 'Connect';
+            startStreamBtn.disabled = true;
+            stopStreamBtn.disabled = true;
+            ipInput.disabled = false;
+            streamStatus.textContent = 'Offline';
+        }
+
+        // Event Listeners
+        connectBtn.addEventListener('click', () => {
+            const ip = ipInput.value.trim();
+            if (!ip) {
+                updateStatus('Please enter a valid IP address', 'error');
+                return;
+            }
+            
+            // Basic IP validation
+            const ipPattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+            if (!ipPattern.test(ip)) {
+                updateStatus('Invalid IP address format', 'error');
+                return;
+            }
+            
+            connectWebSocket(ip);
         });
+
+        startStreamBtn.addEventListener('click', startStream);
+        stopStreamBtn.addEventListener('click', stopStream);
+
+        // Auto-fill local IP suggestion
+        window.addEventListener('load', () => {
+            // Try to get local IP for convenience
+            const possibleIp = window.location.hostname;
+            if (possibleIp && possibleIp !== 'localhost' && possibleIp !== '127.0.0.1') {
+                ipInput.placeholder = `e.g., ${possibleIp}`;
+            }
+            
+            // Focus on input
+            ipInput.focus();
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && document.activeElement === ipInput) {
+                connectBtn.click();
+            }
+            if (e.key === ' ' && remoteVideo.srcObject) {
+                remoteVideo.paused ? remoteVideo.play() : remoteVideo.pause();
+            }
+        });
+
+        // Page visibility handling
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && peerConnection) {
+                console.log('Page hidden, stopping stream to save resources');
+                stopStream();
+            }
+        });
+
+        console.log('Screen Stream Viewer loaded successfully');
     </script>
 </body>
 </html>
