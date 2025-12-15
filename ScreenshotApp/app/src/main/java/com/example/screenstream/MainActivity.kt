@@ -9,6 +9,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -18,6 +19,8 @@ import com.example.screenstream.databinding.ActivityMainBinding
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var mediaProjectionManager: MediaProjectionManager
+    private var ngrokManager: NgrokManager? = null
+    private var isStreamingActive = false
     
     private val TAG = "MainActivity"
     
@@ -46,7 +49,8 @@ class MainActivity : AppCompatActivity() {
                 startService(intent)
             }
             
-            // Get device IP address
+            isStreamingActive = true
+            
             val ipAddress = getDeviceIpAddress()
             val serverUrl = if (ipAddress != null) {
                 "http://$ipAddress:8080"
@@ -57,7 +61,11 @@ class MainActivity : AppCompatActivity() {
             binding.statusText.text = "Screen streaming active"
             binding.startButton.isEnabled = false
             binding.stopButton.isEnabled = true
-            binding.urlText.text = "Open in browser: $serverUrl"
+            binding.urlText.text = "Local: $serverUrl"
+            
+            if (binding.ngrokCheckbox.isChecked) {
+                startNgrokTunnel()
+            }
             
             Toast.makeText(this, "Server: $serverUrl", Toast.LENGTH_LONG).show()
         } else {
@@ -71,8 +79,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         
         mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        ngrokManager = NgrokManager(this)
         
-        // Display device IP on startup
         val ipAddress = getDeviceIpAddress()
         if (ipAddress != null) {
             binding.urlText.text = "Your device IP: $ipAddress"
@@ -83,13 +91,71 @@ class MainActivity : AppCompatActivity() {
         }
         
         binding.stopButton.setOnClickListener {
-            stopService(Intent(this, ScreenStreamService::class.java))
-            binding.statusText.text = "Screen streaming stopped"
-            binding.startButton.isEnabled = true
-            binding.stopButton.isEnabled = false
-            binding.urlText.text = if (ipAddress != null) "Your device IP: $ipAddress" else ""
-            Toast.makeText(this, "Screen streaming stopped", Toast.LENGTH_SHORT).show()
+            stopStreaming()
         }
+        
+        binding.ngrokCheckbox.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked && isStreamingActive) {
+                startNgrokTunnel()
+            } else if (!isChecked) {
+                stopNgrokTunnel()
+            }
+        }
+    }
+    
+    private fun startNgrokTunnel() {
+        binding.ngrokStatusText.visibility = View.VISIBLE
+        binding.ngrokStatusText.text = "Starting ngrok tunnel..."
+        binding.ngrokCheckbox.isEnabled = false
+        
+        ngrokManager?.startTunnels(8080, 8081, object : NgrokManager.TunnelCallback {
+            override fun onTunnelCreated(httpUrl: String, wsUrl: String) {
+                binding.ngrokStatusText.text = "ngrok tunnel active"
+                binding.ngrokStatusText.setTextColor(resources.getColor(android.R.color.holo_green_dark, null))
+                binding.ngrokUrlText.visibility = View.VISIBLE
+                binding.ngrokUrlText.text = "Internet URL: $httpUrl"
+                binding.ngrokCheckbox.isEnabled = true
+                
+                Toast.makeText(this@MainActivity, "ngrok: $httpUrl", Toast.LENGTH_LONG).show()
+                Log.d(TAG, "ngrok HTTP: $httpUrl, WS: $wsUrl")
+            }
+            
+            override fun onTunnelProgress(message: String) {
+                binding.ngrokStatusText.text = message
+            }
+            
+            override fun onError(error: String) {
+                binding.ngrokStatusText.text = "ngrok error: $error"
+                binding.ngrokStatusText.setTextColor(resources.getColor(android.R.color.holo_red_dark, null))
+                binding.ngrokCheckbox.isEnabled = true
+                binding.ngrokCheckbox.isChecked = false
+                
+                Toast.makeText(this@MainActivity, "ngrok error: $error", Toast.LENGTH_SHORT).show()
+                Log.e(TAG, "ngrok error: $error")
+            }
+        })
+    }
+    
+    private fun stopNgrokTunnel() {
+        ngrokManager?.stopTunnels()
+        binding.ngrokStatusText.visibility = View.GONE
+        binding.ngrokUrlText.visibility = View.GONE
+    }
+    
+    private fun stopStreaming() {
+        stopService(Intent(this, ScreenStreamService::class.java))
+        stopNgrokTunnel()
+        
+        isStreamingActive = false
+        binding.statusText.text = "Screen streaming stopped"
+        binding.startButton.isEnabled = true
+        binding.stopButton.isEnabled = false
+        binding.ngrokCheckbox.isChecked = false
+        
+        val ipAddress = getDeviceIpAddress()
+        binding.urlText.text = if (ipAddress != null) "Your device IP: $ipAddress" else ""
+        
+        Toast.makeText(this, "Screen streaming stopped", Toast.LENGTH_SHORT).show()
     }
     
     private fun getDeviceIpAddress(): String? {
