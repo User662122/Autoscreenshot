@@ -58,10 +58,14 @@ class ScreenStreamService : Service() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+    super.onDestroy()
+
+    if (::webRTCManager.isInitialized) {
         webRTCManager.release()
-        mediaProjection?.stop()
     }
+
+    mediaProjection?.stop()
+}
 
     private fun getDeviceIp(): String {
         return java.net.NetworkInterface.getNetworkInterfaces().toList()
