@@ -113,9 +113,33 @@ class NgrokManager(private val context: Context) {
         return try {
             val ngrokFile = File(context.filesDir, "ngrok")
             
-            if (ngrokFile.exists() && ngrokFile.canExecute()) {
-                Log.d(TAG, "ngrok binary already exists")
-                return ngrokFile
+            // Check if binary exists and is executable
+            if (ngrokFile.exists()) {
+                if (ngrokFile.canExecute()) {
+                    Log.d(TAG, "ngrok binary already exists and is executable")
+                    return ngrokFile
+                } else {
+                    // Binary exists but can't execute - try to fix permissions first
+                    Log.d(TAG, "ngrok binary exists but not executable, attempting to fix permissions")
+                    ngrokFile.setReadable(true, false)
+                    ngrokFile.setExecutable(true, false)
+                    
+                    try {
+                        val chmodProcess = Runtime.getRuntime().exec(arrayOf("chmod", "755", ngrokFile.absolutePath))
+                        chmodProcess.waitFor()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "chmod failed: ${e.message}")
+                    }
+                    
+                    if (ngrokFile.canExecute()) {
+                        Log.d(TAG, "Fixed permissions for existing ngrok binary")
+                        return ngrokFile
+                    }
+                    
+                    // If still not executable, delete and re-extract
+                    Log.d(TAG, "Could not fix permissions, deleting and re-extracting")
+                    ngrokFile.delete()
+                }
             }
             
             val assetManager = context.assets
@@ -144,7 +168,24 @@ class NgrokManager(private val context: Context) {
             inputStream.close()
             outputStream.close()
             
-            ngrokFile.setExecutable(true)
+            // Set permissions for all users (owner, group, others)
+            ngrokFile.setReadable(true, false)
+            ngrokFile.setExecutable(true, false)
+            
+            // Fallback: Use chmod command directly for additional permission setting
+            try {
+                val chmodProcess = Runtime.getRuntime().exec(arrayOf("chmod", "755", ngrokFile.absolutePath))
+                chmodProcess.waitFor()
+                Log.d(TAG, "chmod 755 applied to ngrok binary")
+            } catch (e: Exception) {
+                Log.w(TAG, "chmod command failed, relying on setExecutable: ${e.message}")
+            }
+            
+            // Verify the file is executable
+            if (!ngrokFile.canExecute()) {
+                Log.e(TAG, "ngrok binary is not executable after setting permissions")
+                return null
+            }
             
             Log.d(TAG, "ngrok binary extracted to ${ngrokFile.absolutePath}")
             ngrokFile
