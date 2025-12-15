@@ -24,16 +24,19 @@ class WebSocketSignalingServer(
     override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
         clients.add(conn)
         Log.d(TAG, "WebSocket client connected: ${conn.remoteSocketAddress}")
+        Log.d(TAG, "Total clients: ${clients.size}")
         onClientConnected?.invoke()
     }
 
     override fun onClose(conn: WebSocket, code: Int, reason: String?, remote: Boolean) {
         clients.remove(conn)
-        Log.d(TAG, "Client disconnected: $reason")
+        Log.d(TAG, "Client disconnected. Code: $code, Reason: $reason")
+        Log.d(TAG, "Remaining clients: ${clients.size}")
     }
 
     override fun onMessage(conn: WebSocket, message: String) {
         try {
+            Log.d(TAG, "Received message: ${message.take(100)}...")
             val json = JSONObject(message)
             val type = json.getString("type")
 
@@ -41,6 +44,7 @@ class WebSocketSignalingServer(
                 "offer" -> onOfferReceived?.invoke(message)
                 "answer" -> onAnswerReceived?.invoke(message)
                 "ice-candidate" -> onIceCandidateReceived?.invoke(message)
+                "client-connected" -> Log.d(TAG, "Client announced connection")
                 else -> Log.d(TAG, "Unknown message type: $type")
             }
         } catch (e: Exception) {
@@ -49,12 +53,12 @@ class WebSocketSignalingServer(
     }
 
     override fun onError(conn: WebSocket?, ex: Exception?) {
-        Log.e(TAG, "WebSocket error", ex)
+        Log.e(TAG, "WebSocket error on ${conn?.remoteSocketAddress}", ex)
     }
 
     override fun onStart() {
-        Log.d(TAG, "WebSocket server started on port ${address.port}")
-        Log.d(TAG, "Connect WebSocket at: ws://${getLocalIpAddress()}:${address.port}")
+        Log.d(TAG, "✓ WebSocket server started successfully on port ${address.port}")
+        Log.d(TAG, "Waiting for client connections...")
     }
 
     override fun broadcast(message: String) {
@@ -64,16 +68,21 @@ class WebSocketSignalingServer(
             try {
                 if (client.isOpen) {
                     client.send(message)
+                    Log.d(TAG, "Broadcasted to client: ${client.remoteSocketAddress}")
                 } else {
                     disconnectedClients.add(client)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to send to client", e)
+                Log.e(TAG, "Failed to send to client: ${client.remoteSocketAddress}", e)
                 disconnectedClients.add(client)
             }
         }
         
         disconnectedClients.forEach { clients.remove(it) }
+        
+        if (disconnectedClients.isNotEmpty()) {
+            Log.d(TAG, "Removed ${disconnectedClients.size} disconnected clients")
+        }
     }
 
     private fun getLocalIpAddress(): String {
