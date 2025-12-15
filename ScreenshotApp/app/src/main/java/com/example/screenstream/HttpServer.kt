@@ -179,6 +179,22 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        .debug {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 5px;
+            font-size: 12px;
+            font-family: monospace;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .debug-line {
+            margin: 2px 0;
+            color: #333;
+        }
     </style>
 </head>
 <body>
@@ -198,8 +214,8 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
         </div>
 
         <div class="info">
-            <p><strong>Status:</strong> Waiting for stream...</p>
-            <p><strong>Server:</strong> <span id="serverUrl">-</span></p>
+            <p><strong>Status:</strong> <span id="statusText">Initializing...</span></p>
+            <p><strong>WebSocket:</strong> <span id="wsUrl">-</span></p>
             
             <div class="stats">
                 <div class="stat-item">
@@ -215,6 +231,8 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                     <div class="stat-label">Frame Rate</div>
                 </div>
             </div>
+
+            <div class="debug" id="debugLog"></div>
         </div>
     </div>
 
@@ -222,11 +240,13 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
         // DOM Elements
         const video = document.getElementById('remoteVideo');
         const status = document.getElementById('status');
+        const statusText = document.getElementById('statusText');
         const stopBtn = document.getElementById('stopBtn');
         const connectionStatus = document.getElementById('connectionStatus');
         const resolution = document.getElementById('resolution');
         const frameRate = document.getElementById('frameRate');
-        const serverUrl = document.getElementById('serverUrl');
+        const wsUrlElement = document.getElementById('wsUrl');
+        const debugLog = document.getElementById('debugLog');
 
         // WebRTC Configuration
         const config = {
@@ -238,53 +258,90 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
 
         let ws = null;
         let pc = null;
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+
+        // Debug logging
+        function debugMessage(msg) {
+            console.log(msg);
+            const line = document.createElement('div');
+            line.className = 'debug-line';
+            line.textContent = new Date().toLocaleTimeString() + ': ' + msg;
+            debugLog.appendChild(line);
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
 
         // Update status display
         function updateStatus(msg, statusType) {
             statusType = statusType || 'waiting';
             status.innerHTML = msg;
             status.className = 'status ' + statusType;
+            statusText.textContent = msg.replace(/<[^>]*>/g, '');
         }
 
         // Initialize WebSocket connection
         function connectWebSocket() {
             const host = window.location.hostname;
-            const port = window.location.port || '8080';
-            const wsUrl = 'ws://' + host + ':' + port;
+            const wsPort = '8081'; // WebSocket on separate port
+            const wsUrl = 'ws://' + host + ':' + wsPort;
             
-            serverUrl.textContent = host + ':' + port;
-            console.log('Connecting to WebSocket:', wsUrl);
+            wsUrlElement.textContent = wsUrl;
+            debugMessage('Attempting WebSocket connection to: ' + wsUrl);
             
-            ws = new WebSocket(wsUrl);
-            
-            ws.onopen = function() {
-                console.log('WebSocket connected');
-                updateStatus('✓ Connected - Waiting for stream...', 'connected');
-                connectionStatus.textContent = 'Connected';
-            };
-            
-            ws.onmessage = async function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    console.log('Received:', data.type);
-                    await handleMessage(data);
-                } catch (error) {
-                    console.error('Message error:', error);
-                }
-            };
-            
-            ws.onerror = function(error) {
-                console.error('WebSocket error:', error);
-                updateStatus('Connection error - Check if Android app is running', 'error');
-                connectionStatus.textContent = 'Error';
-            };
-            
-            ws.onclose = function() {
-                console.log('WebSocket closed');
-                updateStatus('Disconnected from Android device', 'error');
-                connectionStatus.textContent = 'Disconnected';
-                cleanup();
-            };
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function() {
+                    debugMessage('✓ WebSocket connected successfully');
+                    reconnectAttempts = 0;
+                    updateStatus('✓ Connected - Waiting for stream...', 'connected');
+                    connectionStatus.textContent = 'Connected';
+                    
+                    // Send connection message
+                    ws.send(JSON.stringify({ type: 'client-connected' }));
+                    debugMessage('Sent client-connected message');
+                };
+                
+                ws.onmessage = async function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        debugMessage('Received: ' + data.type);
+                        await handleMessage(data);
+                    } catch (error) {
+                        debugMessage('Error parsing message: ' + error.message);
+                        console.error('Message error:', error);
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    debugMessage('WebSocket error occurred');
+                    console.error('WebSocket error:', error);
+                    updateStatus('Connection error - Check Android app', 'error');
+                    connectionStatus.textContent = 'Error';
+                };
+                
+                ws.onclose = function(event) {
+                    debugMessage('WebSocket closed. Code: ' + event.code + ', Clean: ' + event.wasClean);
+                    
+                    if (event.wasClean) {
+                        updateStatus('Disconnected', 'waiting');
+                    } else {
+                        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                            reconnectAttempts++;
+                            updateStatus('Reconnecting... (' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')', 'waiting');
+                            setTimeout(connectWebSocket, 2000);
+                            return;
+                        }
+                        updateStatus('Connection lost - Refresh to retry', 'error');
+                    }
+                    
+                    connectionStatus.textContent = 'Disconnected';
+                    cleanup();
+                };
+            } catch (error) {
+                debugMessage('Failed to create WebSocket: ' + error.message);
+                updateStatus('Failed to connect - Check network', 'error');
+            }
         }
 
         // Handle signaling messages
@@ -301,7 +358,7 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
 
         // Handle incoming offer
         async function handleOffer(data) {
-            console.log('Received offer, creating peer connection');
+            debugMessage('Processing offer from Android');
             
             // Create peer connection
             pc = new RTCPeerConnection(config);
@@ -315,13 +372,13 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                         sdpMLineIndex: event.candidate.sdpMLineIndex,
                         candidate: event.candidate.candidate
                     }));
-                    console.log('Sent ICE candidate');
+                    debugMessage('Sent ICE candidate');
                 }
             };
             
             // Handle incoming track
             pc.ontrack = function(event) {
-                console.log('Received track:', event.track.kind);
+                debugMessage('Received video track!');
                 video.srcObject = event.streams[0];
                 updateStatus('🎥 Streaming Active!', 'streaming');
                 connectionStatus.textContent = 'Streaming';
@@ -330,19 +387,15 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                 // Update video stats
                 const track = event.track;
                 if (track.kind === 'video') {
-                    track.onended = function() {
-                        console.log('Track ended');
-                        updateStatus('Stream ended', 'waiting');
-                    };
-                    
-                    // Get video settings
                     setTimeout(function() {
                         const settings = track.getSettings();
                         if (settings.width && settings.height) {
                             resolution.textContent = settings.width + '×' + settings.height;
+                            debugMessage('Resolution: ' + settings.width + 'x' + settings.height);
                         }
                         if (settings.frameRate) {
                             frameRate.textContent = Math.round(settings.frameRate) + ' fps';
+                            debugMessage('Frame rate: ' + settings.frameRate);
                         }
                     }, 1000);
                 }
@@ -350,10 +403,10 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
             
             // Handle connection state
             pc.onconnectionstatechange = function() {
-                console.log('Connection state:', pc.connectionState);
+                debugMessage('WebRTC state: ' + pc.connectionState);
                 switch (pc.connectionState) {
                     case 'connected':
-                        connectionStatus.textContent = 'Connected';
+                        connectionStatus.textContent = 'Streaming';
                         break;
                     case 'disconnected':
                     case 'failed':
@@ -361,14 +414,7 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                         updateStatus('Connection lost', 'error');
                         cleanup();
                         break;
-                    case 'closed':
-                        connectionStatus.textContent = 'Closed';
-                        break;
                 }
-            };
-            
-            pc.oniceconnectionstatechange = function() {
-                console.log('ICE connection state:', pc.iceConnectionState);
             };
             
             try {
@@ -377,22 +423,23 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                     type: 'offer',
                     sdp: data.sdp
                 }));
-                console.log('Remote description set');
+                debugMessage('Remote description set');
                 
                 // Create answer
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
-                console.log('Local description set');
+                debugMessage('Local description set');
                 
                 // Send answer
                 ws.send(JSON.stringify({
                     type: 'answer',
                     sdp: answer.sdp
                 }));
-                console.log('Answer sent');
+                debugMessage('Answer sent to Android');
                 
                 updateStatus('Setting up stream...', 'waiting');
             } catch (error) {
+                debugMessage('Error in offer handling: ' + error.message);
                 console.error('Error handling offer:', error);
                 updateStatus('Failed to set up stream', 'error');
             }
@@ -407,8 +454,9 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                         sdpMLineIndex: data.sdpMLineIndex,
                         candidate: data.candidate
                     }));
-                    console.log('Added ICE candidate');
+                    debugMessage('Added ICE candidate');
                 } catch (error) {
+                    debugMessage('Error adding ICE: ' + error.message);
                     console.error('Error adding ICE candidate:', error);
                 }
             }
@@ -416,10 +464,10 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
 
         // Stop streaming
         function stopStream() {
+            debugMessage('Stopping stream');
             cleanup();
             updateStatus('Stream stopped', 'waiting');
             
-            // Notify server
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'stop' }));
             }
@@ -430,6 +478,7 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
             if (pc) {
                 pc.close();
                 pc = null;
+                debugMessage('Peer connection closed');
             }
             
             if (video.srcObject) {
@@ -442,25 +491,16 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
             stopBtn.disabled = true;
             resolution.textContent = '-';
             frameRate.textContent = '-';
-            connectionStatus.textContent = ws && ws.readyState === WebSocket.OPEN ? 'Connected' : 'Disconnected';
         }
 
         // Event listeners
         stopBtn.addEventListener('click', stopStream);
 
-        // Handle page visibility
-        document.addEventListener('visibilitychange', function() {
-            if (document.hidden) {
-                console.log('Page hidden');
-            } else {
-                console.log('Page visible');
-            }
-        });
-
         // Initialize on page load
         window.addEventListener('load', function() {
-            console.log('Page loaded, connecting...');
-            connectWebSocket();
+            debugMessage('Page loaded');
+            debugMessage('Browser: ' + navigator.userAgent);
+            setTimeout(connectWebSocket, 500);
         });
 
         // Cleanup on page unload
@@ -474,13 +514,15 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
     """.trimIndent()
 
     override fun serve(session: IHTTPSession): Response {
-        Log.d(TAG, "HTTP request: ${session.method} ${session.uri}")
+        Log.d(TAG, "HTTP request: ${session.method} ${session.uri} from ${session.remoteIpAddress}")
         
         return when (session.uri) {
             "/" -> {
+                Log.d(TAG, "Serving HTML page")
                 newFixedLengthResponse(Response.Status.OK, "text/html", htmlPage)
             }
             else -> {
+                Log.d(TAG, "404 - Not found: ${session.uri}")
                 newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "404 Not Found")
             }
         }
@@ -488,6 +530,6 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
 
     override fun start() {
         super.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-        Log.d(TAG, "HTTP server started on port $listeningPort")
+        Log.d(TAG, "✓ HTTP server started on port $listeningPort")
     }
 }
