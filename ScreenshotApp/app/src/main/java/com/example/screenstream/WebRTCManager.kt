@@ -6,6 +6,7 @@ import android.media.projection.MediaProjection
 import android.util.Log
 import org.json.JSONObject
 import org.webrtc.*
+
 class WebRTCManager(
     private val context: Context,
     private val mediaProjectionPermissionIntent: Intent
@@ -59,14 +60,14 @@ class WebRTCManager(
     }
 
     private fun createPeer() {
-        val ice = listOf(
+        val iceServers = listOf(
             PeerConnection.IceServer
                 .builder("stun:stun.l.google.com:19302")
                 .createIceServer()
         )
 
         peerConnection = factory.createPeerConnection(
-            PeerConnection.RTCConfiguration(ice),
+            PeerConnection.RTCConfiguration(iceServers),
             object : PeerConnection.Observer {
 
                 override fun onIceCandidate(c: IceCandidate) {
@@ -96,7 +97,7 @@ class WebRTCManager(
                 ) {}
             }
         )
-    }
+    } // ✅ VERY IMPORTANT — function closed here
 
     private fun startCapture() {
         surfaceHelper =
