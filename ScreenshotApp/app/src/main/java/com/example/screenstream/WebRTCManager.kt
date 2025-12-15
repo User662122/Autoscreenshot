@@ -22,7 +22,8 @@ class WebRTCManager(
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
 
-    private val server = WebSocketSignalingServer(8080, context)
+    private val wsServer = WebSocketSignalingServer(8080, context)
+    private val httpServer = HttpServer(8080)
 
     init {
         PeerConnectionFactory.initialize(
@@ -44,19 +45,35 @@ class WebRTCManager(
             )
             .createPeerConnectionFactory()
 
-        startServer()
+        startServers()
     }
 
-    private fun startServer() {
-        server.onClientConnected = {
+    private fun startServers() {
+        // Start HTTP server for web page
+        try {
+            httpServer.start()
+            Log.d(TAG, "HTTP server started successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start HTTP server", e)
+        }
+
+        // Start WebSocket server for signaling
+        wsServer.onClientConnected = {
+            Log.d(TAG, "Client connected, creating peer and starting capture")
             createPeer()
             startCapture()
             createOffer()
         }
 
-        server.onAnswerReceived = { handleAnswer(it) }
-        server.onIceCandidateReceived = { handleIce(it) }
-        server.start()
+        wsServer.onAnswerReceived = { handleAnswer(it) }
+        wsServer.onIceCandidateReceived = { handleIce(it) }
+        
+        try {
+            wsServer.start()
+            Log.d(TAG, "WebSocket server started successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start WebSocket server", e)
+        }
     }
 
     private fun createPeer() {
@@ -71,7 +88,7 @@ class WebRTCManager(
             object : PeerConnection.Observer {
 
                 override fun onIceCandidate(c: IceCandidate) {
-                    server.broadcast(
+                    wsServer.broadcast(
                         JSONObject().apply {
                             put("type", "ice-candidate")
                             put("sdpMid", c.sdpMid)
@@ -82,11 +99,19 @@ class WebRTCManager(
                 }
 
                 override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {}
-                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}
+                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                    Log.d(TAG, "ICE Connection State: $state")
+                }
                 override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
-                override fun onSignalingChange(state: PeerConnection.SignalingState) {}
-                override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {}
+                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                    Log.d(TAG, "ICE Gathering State: $state")
+                }
+                override fun onSignalingChange(state: PeerConnection.SignalingState) {
+                    Log.d(TAG, "Signaling State: $state")
+                }
+                override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+                    Log.d(TAG, "Connection State: $state")
+                }
                 override fun onAddStream(stream: MediaStream) {}
                 override fun onRemoveStream(stream: MediaStream) {}
                 override fun onDataChannel(channel: DataChannel) {}
@@ -97,7 +122,7 @@ class WebRTCManager(
                 ) {}
             }
         )
-    } // ✅ VERY IMPORTANT — function closed here
+    }
 
     private fun startCapture() {
         surfaceHelper =
@@ -125,23 +150,32 @@ class WebRTCManager(
         peerConnection!!.addTrack(
             factory.createVideoTrack("screen", videoSource)
         )
+        
+        Log.d(TAG, "Screen capture started: 720x1280 @ 30fps")
     }
 
     private fun createOffer() {
         peerConnection!!.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
                 peerConnection!!.setLocalDescription(this, sdp)
-                server.broadcast(
+                wsServer.broadcast(
                     JSONObject().apply {
                         put("type", "offer")
                         put("sdp", sdp.description)
                     }.toString()
                 )
+                Log.d(TAG, "Offer created and sent")
             }
 
-            override fun onCreateFailure(p0: String?) {}
-            override fun onSetSuccess() {}
-            override fun onSetFailure(p0: String?) {}
+            override fun onCreateFailure(error: String?) {
+                Log.e(TAG, "Failed to create offer: $error")
+            }
+            override fun onSetSuccess() {
+                Log.d(TAG, "Local description set successfully")
+            }
+            override fun onSetFailure(error: String?) {
+                Log.e(TAG, "Failed to set local description: $error")
+            }
         }, MediaConstraints())
     }
 
@@ -149,8 +183,12 @@ class WebRTCManager(
         val json = JSONObject(msg)
         peerConnection!!.setRemoteDescription(
             object : SdpObserver {
-                override fun onSetSuccess() {}
-                override fun onSetFailure(p0: String?) {}
+                override fun onSetSuccess() {
+                    Log.d(TAG, "Remote description set successfully")
+                }
+                override fun onSetFailure(error: String?) {
+                    Log.e(TAG, "Failed to set remote description: $error")
+                }
                 override fun onCreateSuccess(p0: SessionDescription?) {}
                 override fun onCreateFailure(p0: String?) {}
             },
@@ -170,6 +208,7 @@ class WebRTCManager(
                 j.getString("candidate")
             )
         )
+        Log.d(TAG, "ICE candidate added")
     }
 
     fun release() {
@@ -178,6 +217,8 @@ class WebRTCManager(
         surfaceHelper?.dispose()
         videoSource?.dispose()
         peerConnection?.close()
-        server.stop()
+        wsServer.stop()
+        httpServer.stop()
+        Log.d(TAG, "WebRTC resources released")
     }
 }
