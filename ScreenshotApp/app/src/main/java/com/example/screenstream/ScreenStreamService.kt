@@ -4,8 +4,6 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -19,10 +17,9 @@ import androidx.core.app.NotificationCompat
 
 class ScreenStreamService : Service() {
     private var mediaProjection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private val handler = Handler(Looper.getMainLooper())
     
-    private lateinit var screenEncoder: ScreenEncoder
+    private val handler = Handler(Looper.getMainLooper())
+
     private lateinit var webRTCManager: WebRTCManager
     
     private val TAG = "ScreenStreamService"
@@ -71,52 +68,45 @@ class ScreenStreamService : Service() {
     }
 
     private fun setupScreenCapture() {
-        try {
-            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val metrics = DisplayMetrics()
+    try {
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val metrics = DisplayMetrics()
 
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.getRealMetrics(metrics)
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
 
-            val width = metrics.widthPixels
-            val height = metrics.heightPixels
-            val density = metrics.densityDpi
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        val density = metrics.densityDpi
 
-            Log.d(TAG, "Display metrics: ${width}x${height} density=$density")
+        Log.d(TAG, "Display metrics: ${width}x${height} density=$density")
 
-            // Initialize screen encoder with H.264
-            screenEncoder = ScreenEncoder(width, height, this)
-            
-            // Initialize WebRTC manager with built-in server
-            webRTCManager = WebRTCManager(this, screenEncoder)
-            
-            // Get server URL and update notification
-            val serverUrl = getDeviceIpAddress()
-            if (serverUrl != null) {
-                Log.d(TAG, "WebRTC Server running at: http://$serverUrl:8080")
-                updateNotification("Open: http://$serverUrl:8080")
-            }
-            
-            // Create virtual display with encoder's input surface
-            virtualDisplay = mediaProjection?.createVirtualDisplay(
-                "ScreenStream",
-                width,
-                height,
-                density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                screenEncoder.getInputSurface(),
-                null,
-                null
-            )
+        // ----------------------------------------------------
+        // WHATSAPP STYLE WEBRTC SCREEN CAPTURE
+        // ----------------------------------------------------
+        webRTCManager = WebRTCManager(
+            context = this,
+            mediaProjectionPermissionIntent =
+                intent!!.getParcelableExtra("data")!!
+        )
 
-            Log.d(TAG, "Virtual display created and streaming started")
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Screen capture setup failed", e)
-            stopSelf()
+        // ----------------------------------------------------
+        // Notification update
+        // ----------------------------------------------------
+        val serverIp = getDeviceIpAddress()
+        if (serverIp != null) {
+            val url = "http://$serverIp:8080"
+            Log.d(TAG, "WebRTC Server running at: $url")
+            updateNotification("Open: $url")
         }
+
+        Log.d(TAG, "WebRTC screen streaming started")
+
+    } catch (e: Exception) {
+        Log.e(TAG, "Screen capture setup failed", e)
+        stopSelf()
     }
-    
+}    
     private fun getDeviceIpAddress(): String? {
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
