@@ -1,6 +1,3 @@
-======================================================================
-FILE: ScreenshotApp/app/src/main/java/com/example/screenstream/WebSocketSignalingServer.kt
-======================================================================
 package com.example.screenstream
 
 import android.content.Context
