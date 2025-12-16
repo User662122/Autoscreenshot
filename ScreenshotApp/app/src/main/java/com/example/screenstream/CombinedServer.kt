@@ -621,22 +621,17 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
             val closeReason = reason ?: "Unknown reason"
             val closeCodeName = code?.name ?: "UNKNOWN"
             
-            // Determine numeric code from CloseCode enum
+            // Determine numeric code from CloseCode enum (only include codes that exist in NanoHTTPD)
             val closeCodeValue = when (code) {
                 NanoWSD.WebSocketFrame.CloseCode.NormalClosure -> 1000
                 NanoWSD.WebSocketFrame.CloseCode.GoingAway -> 1001
                 NanoWSD.WebSocketFrame.CloseCode.ProtocolError -> 1002
                 NanoWSD.WebSocketFrame.CloseCode.UnsupportedData -> 1003
-                NanoWSD.WebSocketFrame.CloseCode.NoStatusReceived -> 1005
                 NanoWSD.WebSocketFrame.CloseCode.AbnormalClosure -> 1006
                 NanoWSD.WebSocketFrame.CloseCode.InvalidFramePayloadData -> 1007
                 NanoWSD.WebSocketFrame.CloseCode.PolicyViolation -> 1008
                 NanoWSD.WebSocketFrame.CloseCode.MessageTooBig -> 1009
-                NanoWSD.WebSocketFrame.CloseCode.MandatoryExtension -> 1010
                 NanoWSD.WebSocketFrame.CloseCode.InternalServerError -> 1011
-                NanoWSD.WebSocketFrame.CloseCode.ServiceRestart -> 1012
-                NanoWSD.WebSocketFrame.CloseCode.TryAgainLater -> 1013
-                NanoWSD.WebSocketFrame.CloseCode.TlsHandshakeFailure -> 1015
                 else -> -1
             }
             
@@ -650,7 +645,7 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                     1008 -> "WebSocket Error: Policy violation"
                     1009 -> "WebSocket Error: Message too large"
                     1011 -> "WebSocket Error (1011): Internal server error - ${if (closeReason != "Unknown reason") "Reason: $closeReason - " else ""}Server may have crashed or encountered unexpected condition. Check server logs for details."
-                    -1 -> "WebSocket closed abnormally after ${connectionDuration / 1000}s - No close code received"
+                    -1 -> "WebSocket closed abnormally after ${connectionDuration / 1000}s - No close code received (${closeCodeName})"
                     else -> "WebSocket closed unexpectedly (Code: $closeCodeValue)${if (closeReason != "Unknown reason") " - Reason: $closeReason" else ""} after ${connectionDuration / 1000}s"
                 }
                 
