@@ -2,6 +2,9 @@ package com.example.screenstream
 
 import android.content.Context
 import android.util.Log
+import android.widget.Toast
+import android.os.Handler
+import android.os.Looper
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import org.json.JSONObject
@@ -16,6 +19,14 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
     var onAnswerReceived: ((String) -> Unit)? = null
     var onIceCandidateReceived: ((String) -> Unit)? = null
     var onClientConnected: (() -> Unit)? = null
+
+    private fun showToast(message: String) {
+        context?.let {
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(it, message, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     private fun loadHtmlPage(): String {
         // Try to load from assets first
@@ -313,7 +324,8 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                 });
             }
         }
-function connectWebSocket() {
+
+        function connectWebSocket() {
             var host = window.location.hostname;
             var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             var port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
@@ -329,7 +341,6 @@ function connectWebSocket() {
                     debugMessage('WebSocket connected');
                     reconnectAttempts = 0;
                     pendingIceCandidates = [];
-                    updateStatus('Connected - Waiting for stream...', 'connected');
                     connectionStatus.textContent = 'Connected';
                     ws.send(JSON.stringify({ type: 'client-connected' }));
                 };
@@ -351,14 +362,17 @@ function connectWebSocket() {
                 };
 
                 ws.onclose = function(event) {
-                    debugMessage('WebSocket closed: ' + event.code);
+                    var closeReason = getCloseReason(event.code);
+                    debugMessage('WebSocket closed: Code=' + event.code + ', Reason=' + closeReason);
+                    
                     if (!event.wasClean && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         reconnectAttempts++;
                         updateStatus('Reconnecting (' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')...', 'waiting');
                         setTimeout(connectWebSocket, 2000);
                         return;
                     }
-                    updateStatus('Disconnected', 'error');
+                    
+                    updateStatus('Disconnected: ' + closeReason, 'error');
                     connectionStatus.textContent = 'Disconnected';
                     cleanup();
                 };
@@ -366,6 +380,27 @@ function connectWebSocket() {
                 debugMessage('Connection failed: ' + error.message);
                 updateStatus('Failed to connect: ' + error.message, 'error');
             }
+        }
+
+        function getCloseReason(code) {
+            var reasons = {
+                1000: 'Normal closure',
+                1001: 'Going away',
+                1002: 'Protocol error',
+                1003: 'Unsupported data',
+                1005: 'No status received',
+                1006: 'Abnormal closure - Connection lost unexpectedly',
+                1007: 'Invalid frame payload',
+                1008: 'Policy violation',
+                1009: 'Message too big',
+                1010: 'Missing extension',
+                1011: 'Internal server error',
+                1012: 'Service restart',
+                1013: 'Try again later',
+                1014: 'Bad gateway',
+                1015: 'TLS handshake failure'
+            };
+            return reasons[code] || 'Unknown error (code: ' + code + ')';
         }
 
         function handleMessage(data) {
@@ -498,7 +533,8 @@ function connectWebSocket() {
                 updateStatus('Setup failed: ' + error.message, 'error');
             });
         }
-function handleIceCandidate(data) {
+
+        function handleIceCandidate(data) {
             if (!data.candidate) return;
 
             if (!pc || !pc.remoteDescription) {
@@ -562,10 +598,13 @@ function handleIceCandidate(data) {
 
     inner class WebSocketClient(handshake: NanoHTTPD.IHTTPSession) : NanoWSD.WebSocket(handshake) {
         
+        private var connectionTime: Long = 0
+        
         override fun onOpen() {
             synchronized(clients) {
                 clients.add(this)
             }
+            connectionTime = System.currentTimeMillis()
             Log.d(TAG, "WebSocket client connected. Total: ${clients.size}")
             onClientConnected?.invoke()
         }
@@ -574,6 +613,37 @@ function handleIceCandidate(data) {
             synchronized(clients) {
                 clients.remove(this)
             }
+            
+            val connectionDuration = System.currentTimeMillis() - connectionTime
+            val wasActive = connectionDuration > 1000 // Connection was active for more than 1 second
+            
+            // Get close code details
+            val closeCodeValue = code?.code ?: -1
+            val closeReason = reason ?: "Unknown reason"
+            
+            // Show toast only for error closures (not normal closures)
+            if (wasActive && (closeCodeValue != 1000 && closeCodeValue != 1001)) {
+                val errorMessage = when (closeCodeValue) {
+                    1002 -> "WebSocket Error: Protocol error - Invalid WebSocket frame received"
+                    1003 -> "WebSocket Error: Unsupported data type received"
+                    1006 -> "WebSocket Error: Connection lost unexpectedly (Code 1006) - Network or tunnel issue"
+                    1007 -> "WebSocket Error: Invalid frame payload data"
+                    1008 -> "WebSocket Error: Policy violation"
+                    1009 -> "WebSocket Error: Message too large"
+                    1011 -> "WebSocket Error (1011): Internal server error - ${if (closeReason != "Unknown reason") "Reason: $closeReason - " else ""}Server may have crashed or encountered unexpected condition. Check server logs for details."
+                    -1 -> "WebSocket closed abnormally after ${connectionDuration / 1000}s - No close code received"
+                    else -> "WebSocket closed unexpectedly (Code: $closeCodeValue)${if (closeReason != "Unknown reason") " - Reason: $closeReason" else ""} after ${connectionDuration / 1000}s"
+                }
+                
+                showToast(errorMessage)
+            } else if (closeCodeValue == 1006 && !wasActive) {
+                // Connection failed immediately
+                showToast("WebSocket failed to connect - Network unreachable or server not responding")
+            } else if (closeCodeValue == 1011) {
+                // Always show 1011 errors even if connection was brief
+                showToast("WebSocket Error (1011): Internal server error - ${if (closeReason != "Unknown reason") "Reason: $closeReason - " else ""}Server encountered unexpected condition after ${connectionDuration / 1000}s")
+            }
+            
             Log.d(TAG, "WebSocket client disconnected. Remaining: ${clients.size}")
         }
 
@@ -601,6 +671,7 @@ function handleIceCandidate(data) {
 
         override fun onException(exception: IOException?) {
             Log.e(TAG, "WebSocket exception", exception)
+            showToast("WebSocket Error: ${exception?.message ?: "Connection exception"}")
         }
     }
 
@@ -616,7 +687,8 @@ function handleIceCandidate(data) {
             loadHtmlPage()
         )
     }
-fun broadcast(message: String) {
+
+    fun broadcast(message: String) {
         synchronized(clients) {
             val disconnected = mutableListOf<WebSocketClient>()
             
