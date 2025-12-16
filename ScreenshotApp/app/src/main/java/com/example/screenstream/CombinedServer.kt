@@ -9,11 +9,18 @@ import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import org.json.JSONObject
 import java.io.IOException
+import java.util.Timer
+import java.util.TimerTask
 
 class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(port) {
 
     private val TAG = "CombinedServer"
     private val clients = mutableListOf<WebSocketClient>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    
+    // Keep-alive timer to prevent Cloudflare timeout
+    private var pingTimer: Timer? = null
+    private val PING_INTERVAL = 15000L // 15 seconds
 
     var onOfferReceived: ((String) -> Unit)? = null
     var onAnswerReceived: ((String) -> Unit)? = null
@@ -22,9 +29,46 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
 
     private fun showToast(message: String) {
         context?.let {
-            Handler(Looper.getMainLooper()).post {
+            mainHandler.post {
                 Toast.makeText(it, message, Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    // Start ping timer when server starts
+    fun startPingTimer() {
+        stopPingTimer()
+        pingTimer = Timer("WebSocketPing", true)
+        pingTimer?.scheduleAtFixedRate(object : TimerTask() {
+            override fun run() {
+                sendPingToAllClients()
+            }
+        }, PING_INTERVAL, PING_INTERVAL)
+        Log.d(TAG, "Ping timer started with interval: ${PING_INTERVAL}ms")
+    }
+
+    fun stopPingTimer() {
+        pingTimer?.cancel()
+        pingTimer = null
+    }
+
+    private fun sendPingToAllClients() {
+        synchronized(clients) {
+            val disconnected = mutableListOf<WebSocketClient>()
+            clients.forEach { client ->
+                try {
+                    if (client.isOpen) {
+                        client.ping(byteArrayOf())
+                        Log.v(TAG, "Ping sent to client")
+                    } else {
+                        disconnected.add(client)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ping failed", e)
+                    disconnected.add(client)
+                }
+            }
+            clients.removeAll(disconnected.toSet())
         }
     }
 
@@ -408,6 +452,12 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                 case 'ice-candidate':
                     handleIceCandidate(data);
                     break;
+                case 'ping':
+                    // Respond to server ping with pong
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'pong' }));
+                    }
+                    break;
             }
         }
 
@@ -596,6 +646,7 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
     inner class WebSocketClient(handshake: NanoHTTPD.IHTTPSession) : NanoWSD.WebSocket(handshake) {
         
         private var connectionTime: Long = 0
+        private var lastActivityTime: Long = 0
         
         override fun onOpen() {
             try {
@@ -603,18 +654,19 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                     clients.add(this)
                 }
                 connectionTime = System.currentTimeMillis()
+                lastActivityTime = connectionTime
                 Log.d(TAG, "WebSocket client connected. Total: ${clients.size}")
                 
-                // CRITICAL FIX: Safely invoke callback with null check
-                try {
-                    onClientConnected?.invoke()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error in onClientConnected callback", e)
+                // CRITICAL FIX: Execute callback on main thread to prevent blocking WebSocket thread
+                mainHandler.post {
+                    try {
+                        onClientConnected?.invoke()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in onClientConnected callback", e)
+                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "FATAL: Exception in onOpen()", e)
-                showToast("Connection failed: ${e.message}")
-                // Don't rethrow - handle gracefully
+                Log.e(TAG, "Error in onOpen", e)
             }
         }
 
@@ -626,10 +678,6 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                 
                 val connectionDuration = System.currentTimeMillis() - connectionTime
                 val durationSec = connectionDuration / 1000
-                val wasActive = connectionDuration > 1000
-                
-                val closeReason = reason ?: "No reason provided"
-                val closeCodeName = code?.name ?: "NULL"
                 
                 val closeCodeValue = when (code) {
                     NanoWSD.WebSocketFrame.CloseCode.NormalClosure -> 1000
@@ -644,128 +692,158 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                     else -> -1
                 }
                 
-                Log.w(TAG, """
-                    ═══════════════════════════════════════════════════
-                    WebSocket CLOSED - Detailed Analysis
-                    ═══════════════════════════════════════════════════
-                    Close Code: $closeCodeValue ($closeCodeName)
-                    Reason: "$closeReason"
-                    Initiated By: ${if (initiatedByRemote) "REMOTE (Client/Cloudflare)" else "LOCAL (Server)"}
-                    Connection Duration: ${durationSec}s (${if (wasActive) "Active" else "Brief"})
-                    Was Active: $wasActive
-                    Remaining Clients: ${clients.size}
-                    ═══════════════════════════════════════════════════
-                """.trimIndent())
+                Log.w(TAG, "WebSocket CLOSED - Code: $closeCodeValue, Duration: ${durationSec}s, Reason: $reason")
                 
                 if (closeCodeValue == 1011) {
-                    val detailedError = buildString {
-                        append("🔴 WebSocket Error 1011 - INTERNAL SERVER ERROR\n")
-                        append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                        append("Duration: ${durationSec}s\n")
-                        append("Reason: $closeReason\n")
-                        append("Initiated: ${if (initiatedByRemote) "Remote" else "Server"}\n")
-                        append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                        append("CAUSE: Handler terminated without proper closure\n")
-                        append("This means:\n")
-                        append("• Message handler crashed unexpectedly\n")
-                        append("• Exception in onMessage() or onOpen()\n")
-                        append("• Server thread died prematurely\n")
-                        append("• Critical: Check for null pointer exceptions\n")
-                        append("• Critical: Check for unhandled exceptions in handlers\n")
-                        append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                        append("ACTION: Check logcat for exceptions immediately before this")
-                    }
-                    
-                    Log.e(TAG, detailedError)
-                    showToast(detailedError)
+                    Log.e(TAG, "INTERNAL SERVER ERROR (1011) - Handler crashed!")
+                    showToast("WebSocket Error 1011 - Server handler crashed after ${durationSec}s")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onClose", e)
+            }
+        }
+
+        override fun onMessage(message: NanoWSD.WebSocketFrame) {
+            // CRITICAL: Wrap EVERYTHING in try-catch to prevent handler crash
+            try {
+                lastActivityTime = System.currentTimeMillis()
+                
+                val text = message.textPayload
+                if (text.isNullOrEmpty()) {
+                    Log.w(TAG, "Received empty message")
                     return
                 }
                 
-                when (closeCodeValue) {
-                    1006 -> {
-                        val msg = buildString {
-                            append("⚠️ WebSocket 1006 - ABNORMAL CLOSURE\n")
-                            append("Duration: ${durationSec}s\n")
-                            append("Reason: $closeReason\n")
-                            if (!wasActive) {
-                                append("CAUSE: Connection failed immediately\n")
-                                append("• Cloudflare tunnel may be down\n")
-                                append("• Port 8080 not reachable\n")
-                                append("• Server not responding to Cloudflare\n")
-                            } else {
-                                append("CAUSE: Network interruption\n")
-                                append("• Connection lost unexpectedly\n")
-                                append("• Tunnel disconnected mid-stream\n")
-                                append("• Client network dropped\n")
-                            }
-                        }
-                        Log.w(TAG, msg)
-                        showToast(msg)
-                    }
-                    
-                    1002 -> {
-                        val msg = "⚠️ WebSocket 1002 - PROTOCOL ERROR\n" +
-                                "Reason: $closeReason\n" +
-                                "CAUSE: Invalid WebSocket frame received\n" +
-                                "• Malformed message from client\n" +
-                                "• Protocol mismatch"
-                        Log.w(TAG, msg)
-                        if (wasActive) showToast(msg)
-                    }
-                    
-                    1003 -> {
-                        val msg = "⚠️ WebSocket 1003 - UNSUPPORTED DATA\n" +
-                                "Reason: $closeReason\n" +
-                                "CAUSE: Received unsupported data type\n" +
-                                "• Binary data sent when text expected\n" +
-                                "• Wrong message format"
-                        Log.w(TAG, msg)
-                        if (wasActive) showToast(msg)
-                    }
-                    
-                    1007 -> {
-                        val msg = "⚠️ WebSocket 1007 - INVALID PAYLOAD\n" +
-                                "Reason: $closeReason\n" +
-                                "CAUSE: Frame payload data was invalid\n" +
-                                "• Corrupted message data\n" +
-                                "• UTF-8 encoding error"
-                        Log.w(TAG, msg)
-                        if (wasActive) showToast(msg)
-                    }
-                    
-                    1009 -> {
-                        val msg = "⚠️ WebSocket 1009 - MESSAGE TOO BIG\n" +
-                                "Reason: $closeReason\n" +
-                                "CAUSE: Message exceeded size limit\n" +
-                                "• SDP or ICE candidate too large\n" +
-                                "• Consider message chunking"
-                        Log.w(TAG, msg)
-                        if (wasActive) showToast(msg)
-                    }
-                    
-                    -1 -> {
-                        val msg = "⚠️ WebSocket CLOSED - NULL CODE\n" +
-                                "CodeName: $closeCodeName\n" +
-                                "Reason: $closeReason\n" +
-                                "Duration: ${durationSec}s\n" +
-                                "CAUSE: No close code received\n" +
-                                "• Abnormal termination\n" +
-                                "• Handler may have crashed"
-                        Log.w(TAG, msg)
-                        if (wasActive) showToast(msg)
-                    }
-                    
-                    1000, 1001 -> {
-                        Log.i(TAG, "WebSocket closed normally (Code: $closeCodeValue)")
-                    }
-                    
-                    else -> {
-                        val msg = "⚠️ WebSocket $closeCodeValue - UNEXPECTED CODE\n" +
-                                "Reason: $closeReason\n" +
-                                "Duration: ${durationSec}s\n" +
-                                "CAUSE: Rare or custom close code"
-                        Log.w(TAG, msg)
-                        if (wasActive) showToast(msg)
-                    }
+                Log.d(TAG, "Received message: ${text.take(100)}...")
+                
+                val json = try {
+                    JSONObject(text)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse JSON: ${e.message}")
+                    return
                 }
                 
+                val type = json.optString("type", "")
+                if (type.isEmpty()) {
+                    Log.w(TAG, "Message has no type field")
+                    return
+                }
+
+                // CRITICAL FIX: Execute ALL callbacks on main thread
+                // This prevents blocking the WebSocket thread and prevents crashes
+                when (type) {
+                    "offer" -> {
+                        mainHandler.post {
+                            try {
+                                onOfferReceived?.invoke(text)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error in onOfferReceived callback", e)
+                            }
+                        }
+                    }
+                    "answer" -> {
+                        mainHandler.post {
+                            try {
+                                onAnswerReceived?.invoke(text)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error in onAnswerReceived callback", e)
+                            }
+                        }
+                    }
+                    "ice-candidate" -> {
+                        mainHandler.post {
+                            try {
+                                onIceCandidateReceived?.invoke(text)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error in onIceCandidateReceived callback", e)
+                            }
+                        }
+                    }
+                    "client-connected" -> {
+                        Log.d(TAG, "Client announced connection")
+                    }
+                    "pong" -> {
+                        Log.v(TAG, "Received pong from client")
+                    }
+                    "stop" -> {
+                        Log.d(TAG, "Client requested stop")
+                    }
+                    else -> {
+                        Log.d(TAG, "Unknown message type: $type")
+                    }
+                }
+            } catch (e: Exception) {
+                // CRITICAL: Catch ANY exception to prevent 1011 error
+                Log.e(TAG, "CRITICAL: Exception in onMessage handler", e)
+            }
+        }
+
+        override fun onPong(pong: NanoWSD.WebSocketFrame?) {
+            try {
+                lastActivityTime = System.currentTimeMillis()
+                Log.v(TAG, "Received pong from client")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onPong", e)
+            }
+        }
+
+        override fun onException(exception: IOException?) {
+            try {
+                Log.e(TAG, "WebSocket exception: ${exception?.message}", exception)
+                // Don't show toast for every exception - it can be noisy
+                if (exception?.message?.contains("closed") != true) {
+                    showToast("WebSocket Error: ${exception?.message ?: "Connection exception"}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in onException handler", e)
+            }
+        }
+    }
+
+    override fun openWebSocket(handshake: NanoHTTPD.IHTTPSession): NanoWSD.WebSocket {
+        return WebSocketClient(handshake)
+    }
+
+    override fun serveHttp(session: NanoHTTPD.IHTTPSession): NanoHTTPD.Response {
+        Log.d(TAG, "HTTP request: ${session.uri} from ${session.remoteIpAddress}")
+        return NanoHTTPD.newFixedLengthResponse(
+            NanoHTTPD.Response.Status.OK,
+            "text/html",
+            loadHtmlPage()
+        )
+    }
+
+    fun broadcast(message: String) {
+        synchronized(clients) {
+            val disconnected = mutableListOf<WebSocketClient>()
+            
+            clients.forEach { client ->
+                try {
+                    if (client.isOpen) {
+                        client.send(message)
+                        Log.d(TAG, "Broadcasted to client")
+                    } else {
+                        disconnected.add(client)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Broadcast error", e)
+                    disconnected.add(client)
+                }
+            }
+            
+            clients.removeAll(disconnected.toSet())
+        }
+    }
+
+    override fun start() {
+        super.start()
+        startPingTimer()
+        Log.d(TAG, "Server started with ping timer")
+    }
+
+    override fun stop() {
+        stopPingTimer()
+        super.stop()
+        Log.d(TAG, "Server stopped")
+    }
+}
