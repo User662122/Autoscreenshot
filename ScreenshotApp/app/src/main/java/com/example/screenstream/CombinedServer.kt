@@ -617,9 +617,28 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
             val connectionDuration = System.currentTimeMillis() - connectionTime
             val wasActive = connectionDuration > 1000 // Connection was active for more than 1 second
             
-            // Get close code details
-            val closeCodeValue = code?.code ?: -1
+            // Get close code details - use the CloseCode enum directly
             val closeReason = reason ?: "Unknown reason"
+            val closeCodeName = code?.name ?: "UNKNOWN"
+            
+            // Determine numeric code from CloseCode enum
+            val closeCodeValue = when (code) {
+                NanoWSD.WebSocketFrame.CloseCode.NormalClosure -> 1000
+                NanoWSD.WebSocketFrame.CloseCode.GoingAway -> 1001
+                NanoWSD.WebSocketFrame.CloseCode.ProtocolError -> 1002
+                NanoWSD.WebSocketFrame.CloseCode.UnsupportedData -> 1003
+                NanoWSD.WebSocketFrame.CloseCode.NoStatusReceived -> 1005
+                NanoWSD.WebSocketFrame.CloseCode.AbnormalClosure -> 1006
+                NanoWSD.WebSocketFrame.CloseCode.InvalidFramePayloadData -> 1007
+                NanoWSD.WebSocketFrame.CloseCode.PolicyViolation -> 1008
+                NanoWSD.WebSocketFrame.CloseCode.MessageTooBig -> 1009
+                NanoWSD.WebSocketFrame.CloseCode.MandatoryExtension -> 1010
+                NanoWSD.WebSocketFrame.CloseCode.InternalServerError -> 1011
+                NanoWSD.WebSocketFrame.CloseCode.ServiceRestart -> 1012
+                NanoWSD.WebSocketFrame.CloseCode.TryAgainLater -> 1013
+                NanoWSD.WebSocketFrame.CloseCode.TlsHandshakeFailure -> 1015
+                else -> -1
+            }
             
             // Show toast only for error closures (not normal closures)
             if (wasActive && (closeCodeValue != 1000 && closeCodeValue != 1001)) {
