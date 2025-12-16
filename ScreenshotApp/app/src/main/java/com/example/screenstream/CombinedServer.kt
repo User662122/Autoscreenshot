@@ -15,13 +15,12 @@ import java.util.Timer
 import java.util.TimerTask
 
 /**
- * FIXED VERSION v3 - Complete fix for 5-second socket timeout
+ * FIXED VERSION v4 - Fixes Cloudflare Tunnel timeout (~100 seconds)
  * 
- * ROOT CAUSE: NanoHTTPD has SOCKET_READ_TIMEOUT = 5000ms (final constant)
- * The socket read times out after 5 seconds of no data.
+ * Issue: Cloudflare tunnels have idle connection timeout (~100 seconds)
+ * WebSocket ping frames may not count as traffic for Cloudflare.
  * 
- * FIX: We override makeClientHandler to set socket timeout to 0 BEFORE
- * NanoHTTPD processes the connection.
+ * Fix: Send actual JSON text messages as keep-alive that Cloudflare recognizes as traffic
  */
 class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(port) {
 
@@ -29,10 +28,11 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
     private val clients = mutableListOf<WebSocketClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
     
-    // Keep-alive - must be less than 5 seconds to beat the timeout
-    private var pingTimer: Timer? = null
-    private val PING_INTERVAL = 3000L // 3 seconds - MUST be less than 5 second timeout!
-    private val PING_INITIAL_DELAY = 1000L // Start pinging after 1 second
+    // Keep-alive must be frequent enough to beat Cloudflare's ~100s timeout
+    // Using 30 seconds to be safe
+    private var keepAliveTimer: Timer? = null
+    private val KEEP_ALIVE_INTERVAL = 30000L // 30 seconds
+    private val KEEP_ALIVE_INITIAL_DELAY = 5000L // Start after 5 seconds
 
     var onOfferReceived: ((String) -> Unit)? = null
     var onAnswerReceived: ((String) -> Unit)? = null
@@ -48,58 +48,69 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
     }
 
     /**
-     * CRITICAL FIX: Override to set infinite socket timeout
-     * This is called for each new client connection BEFORE the socket is processed
+     * CRITICAL: Override to set infinite socket timeout
      */
     override fun createClientHandler(finalAccept: Socket, inputStream: java.io.InputStream): ClientHandler {
         try {
-            // Set socket timeout to 0 (infinite) to prevent 5-second timeout
-            finalAccept.soTimeout = 0
-            Log.d(TAG, "Socket timeout set to infinite for new connection")
+            finalAccept.soTimeout = 0 // Infinite timeout
+            finalAccept.keepAlive = true // Enable TCP keep-alive
+            Log.d(TAG, "Socket configured: timeout=infinite, keepAlive=true")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to set socket timeout", e)
+            Log.e(TAG, "Socket config error", e)
         }
         return super.createClientHandler(finalAccept, inputStream)
     }
 
-    fun startPingTimer() {
-        stopPingTimer()
-        pingTimer = Timer("WebSocketPing", true)
-        pingTimer?.scheduleAtFixedRate(object : TimerTask() {
+    fun startKeepAliveTimer() {
+        stopKeepAliveTimer()
+        keepAliveTimer = Timer("WebSocketKeepAlive", true)
+        keepAliveTimer?.scheduleAtFixedRate(object : TimerTask() {
             override fun run() {
-                sendPingToAllClients()
+                sendKeepAliveToAllClients()
             }
-        }, PING_INITIAL_DELAY, PING_INTERVAL)
-        Log.d(TAG, "Ping timer started: initial=${PING_INITIAL_DELAY}ms, interval=${PING_INTERVAL}ms")
+        }, KEEP_ALIVE_INITIAL_DELAY, KEEP_ALIVE_INTERVAL)
+        Log.d(TAG, "Keep-alive timer started: interval=${KEEP_ALIVE_INTERVAL}ms")
     }
 
-    fun stopPingTimer() {
+    fun stopKeepAliveTimer() {
         try {
-            pingTimer?.cancel()
-            pingTimer = null
+            keepAliveTimer?.cancel()
+            keepAliveTimer = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping ping timer", e)
+            Log.e(TAG, "Timer stop error", e)
         }
     }
 
-    private fun sendPingToAllClients() {
+    /**
+     * Send actual JSON text message as keep-alive
+     * This ensures Cloudflare sees traffic and doesn't timeout
+     */
+    private fun sendKeepAliveToAllClients() {
+        val keepAliveMessage = JSONObject().apply {
+            put("type", "ping")
+            put("timestamp", System.currentTimeMillis())
+        }.toString()
+        
         synchronized(clients) {
             val disconnected = mutableListOf<WebSocketClient>()
             clients.forEach { client ->
                 try {
                     if (client.isOpen) {
+                        // Send both: WebSocket ping frame AND JSON text message
                         client.ping(byteArrayOf(0x01))
-                        Log.v(TAG, "Ping sent")
+                        client.send(keepAliveMessage)
+                        Log.v(TAG, "Keep-alive sent")
                     } else {
                         disconnected.add(client)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Ping failed: ${e.message}")
+                    Log.e(TAG, "Keep-alive failed: ${e.message}")
                     disconnected.add(client)
                 }
             }
             if (disconnected.isNotEmpty()) {
                 clients.removeAll(disconnected.toSet())
+                Log.d(TAG, "Removed ${disconnected.size} dead clients")
             }
         }
     }
@@ -240,6 +251,7 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
     </div>
     <div class="info">
         <p><strong>Status:</strong> <span id="statusText">Initializing...</span></p>
+        <p><strong>Connection Time:</strong> <span id="connTime">0s</span></p>
         <div class="stats">
             <div class="stat-item">
                 <div class="stat-value" id="connectionStatus">Connecting</div>
@@ -248,6 +260,10 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
             <div class="stat-item">
                 <div class="stat-value" id="resolution">-</div>
                 <div class="stat-label">Resolution</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="pingCount">0</div>
+                <div class="stat-label">Pings</div>
             </div>
         </div>
         <div class="debug" id="debugLog"></div>
@@ -260,11 +276,19 @@ var statusText = document.getElementById('statusText');
 var stopBtn = document.getElementById('stopBtn');
 var connectionStatus = document.getElementById('connectionStatus');
 var resolution = document.getElementById('resolution');
+var pingCountEl = document.getElementById('pingCount');
+var connTimeEl = document.getElementById('connTime');
 var debugLog = document.getElementById('debugLog');
 var playOverlay = document.getElementById('playOverlay');
 
 var config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 var ws = null, pc = null, pendingIceCandidates = [], reconnectAttempts = 0;
+var pingCount = 0;
+var connStartTime = 0;
+var connTimer = null;
+
+// Client-side keep-alive: send pong every 25 seconds
+var clientKeepAliveInterval = null;
 
 function log(msg) {
     console.log(msg);
@@ -272,12 +296,51 @@ function log(msg) {
     line.textContent = new Date().toLocaleTimeString() + ': ' + msg;
     debugLog.appendChild(line);
     debugLog.scrollTop = debugLog.scrollHeight;
+    // Keep only last 50 lines
+    while (debugLog.children.length > 50) {
+        debugLog.removeChild(debugLog.firstChild);
+    }
 }
 
 function updateStatus(msg, type) {
     status.textContent = msg;
     status.className = 'status ' + (type || 'waiting');
     statusText.textContent = msg;
+}
+
+function startConnTimer() {
+    connStartTime = Date.now();
+    if (connTimer) clearInterval(connTimer);
+    connTimer = setInterval(function() {
+        var secs = Math.floor((Date.now() - connStartTime) / 1000);
+        var mins = Math.floor(secs / 60);
+        secs = secs % 60;
+        connTimeEl.textContent = mins + 'm ' + secs + 's';
+    }, 1000);
+}
+
+function stopConnTimer() {
+    if (connTimer) {
+        clearInterval(connTimer);
+        connTimer = null;
+    }
+}
+
+function startClientKeepAlive() {
+    stopClientKeepAlive();
+    clientKeepAliveInterval = setInterval(function() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+            log('Client keep-alive sent');
+        }
+    }, 25000); // Every 25 seconds
+}
+
+function stopClientKeepAlive() {
+    if (clientKeepAliveInterval) {
+        clearInterval(clientKeepAliveInterval);
+        clientKeepAliveInterval = null;
+    }
 }
 
 video.onplaying = function() { 
@@ -301,13 +364,27 @@ function connect() {
     ws.onopen = function() {
         log('Connected');
         reconnectAttempts = 0;
+        pingCount = 0;
+        pingCountEl.textContent = '0';
         connectionStatus.textContent = 'Connected';
+        startConnTimer();
+        startClientKeepAlive();
         ws.send(JSON.stringify({ type: 'client-connected' }));
     };
     
     ws.onmessage = function(e) {
         try {
             var data = JSON.parse(e.data);
+            
+            // Handle ping/pong silently
+            if (data.type === 'ping') {
+                pingCount++;
+                pingCountEl.textContent = pingCount;
+                // Respond with pong
+                ws.send(JSON.stringify({ type: 'pong', timestamp: data.timestamp }));
+                return;
+            }
+            
             log('Received: ' + data.type);
             if (data.type === 'offer') handleOffer(data);
             else if (data.type === 'ice-candidate') handleIce(data);
@@ -315,13 +392,17 @@ function connect() {
     };
     
     ws.onclose = function(e) {
-        log('Closed: ' + e.code);
-        if (reconnectAttempts < 5) {
+        log('Closed: code=' + e.code + ', reason=' + (e.reason || 'none'));
+        stopConnTimer();
+        stopClientKeepAlive();
+        connectionStatus.textContent = 'Disconnected';
+        
+        if (!e.wasClean && reconnectAttempts < 5) {
             reconnectAttempts++;
-            updateStatus('Reconnecting...', 'waiting');
+            updateStatus('Reconnecting (' + reconnectAttempts + '/5)...', 'waiting');
             setTimeout(connect, 2000);
         } else {
-            updateStatus('Disconnected', 'error');
+            updateStatus('Disconnected (code: ' + e.code + ')', 'error');
         }
     };
     
@@ -348,13 +429,24 @@ function handleOffer(data) {
         video.srcObject = e.streams[0] || new MediaStream([e.track]);
         connectionStatus.textContent = 'Streaming';
         stopBtn.disabled = false;
-        setTimeout(function() { video.play().catch(function() { playOverlay.classList.remove('hidden'); }); }, 100);
+        setTimeout(function() { 
+            video.play().catch(function() { 
+                playOverlay.classList.remove('hidden'); 
+            }); 
+        }, 100);
         
         if (e.track.kind === 'video') {
             setTimeout(function() {
                 var s = e.track.getSettings();
                 if (s.width) resolution.textContent = s.width + 'x' + s.height;
             }, 1000);
+        }
+    };
+    
+    pc.onconnectionstatechange = function() {
+        log('WebRTC state: ' + pc.connectionState);
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            updateStatus('WebRTC ' + pc.connectionState, 'error');
         }
     };
     
@@ -385,13 +477,23 @@ function handleIce(data) {
 
 stopBtn.onclick = function() {
     if (pc) { pc.close(); pc = null; }
-    if (video.srcObject) { video.srcObject.getTracks().forEach(function(t) { t.stop(); }); video.srcObject = null; }
+    if (video.srcObject) { 
+        video.srcObject.getTracks().forEach(function(t) { t.stop(); }); 
+        video.srcObject = null; 
+    }
     stopBtn.disabled = true;
+    stopConnTimer();
+    stopClientKeepAlive();
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stop' }));
     updateStatus('Stopped', 'waiting');
 };
 
 window.onload = connect;
+window.onbeforeunload = function() {
+    stopConnTimer();
+    stopClientKeepAlive();
+    if (ws) ws.close();
+};
 </script>
 </body>
 </html>
@@ -401,11 +503,13 @@ window.onload = connect;
     inner class WebSocketClient(handshake: NanoHTTPD.IHTTPSession) : NanoWSD.WebSocket(handshake) {
         
         private var connectionTime = System.currentTimeMillis()
+        private var lastPongTime = System.currentTimeMillis()
         
         override fun onOpen() {
             try {
                 synchronized(clients) { clients.add(this) }
                 connectionTime = System.currentTimeMillis()
+                lastPongTime = connectionTime
                 Log.d(TAG, "Client connected. Total: ${clients.size}")
                 
                 mainHandler.post {
@@ -422,6 +526,7 @@ window.onload = connect;
                 synchronized(clients) { clients.remove(this) }
                 val duration = (System.currentTimeMillis() - connectionTime) / 1000
                 Log.w(TAG, "CLOSED - Code: ${code?.name}, Duration: ${duration}s, Reason: $reason, Remote: $initiatedByRemote")
+                showToast("WebSocket closed after ${duration}s - ${code?.name}")
             } catch (e: Exception) {
                 Log.e(TAG, "onClose error", e)
             }
@@ -433,24 +538,35 @@ window.onload = connect;
                 val json = try { JSONObject(text) } catch (e: Exception) { return }
                 val type = json.optString("type", "")
                 
-                Log.d(TAG, "Message: $type")
-                
                 when (type) {
-                    "offer" -> mainHandler.post {
-                        try { onOfferReceived?.invoke(text) }
-                        catch (e: Exception) { Log.e(TAG, "offer error", e) }
+                    "offer" -> {
+                        Log.d(TAG, "Offer received")
+                        mainHandler.post {
+                            try { onOfferReceived?.invoke(text) }
+                            catch (e: Exception) { Log.e(TAG, "offer error", e) }
+                        }
                     }
-                    "answer" -> mainHandler.post {
-                        try { onAnswerReceived?.invoke(text) }
-                        catch (e: Exception) { Log.e(TAG, "answer error", e) }
+                    "answer" -> {
+                        Log.d(TAG, "Answer received")
+                        mainHandler.post {
+                            try { onAnswerReceived?.invoke(text) }
+                            catch (e: Exception) { Log.e(TAG, "answer error", e) }
+                        }
                     }
-                    "ice-candidate" -> mainHandler.post {
-                        try { onIceCandidateReceived?.invoke(text) }
-                        catch (e: Exception) { Log.e(TAG, "ice error", e) }
+                    "ice-candidate" -> {
+                        Log.d(TAG, "ICE candidate received")
+                        mainHandler.post {
+                            try { onIceCandidateReceived?.invoke(text) }
+                            catch (e: Exception) { Log.e(TAG, "ice error", e) }
+                        }
                     }
                     "client-connected" -> Log.d(TAG, "Client connected msg")
-                    "pong" -> Log.v(TAG, "Pong")
-                    "stop" -> Log.d(TAG, "Stop")
+                    "pong" -> {
+                        lastPongTime = System.currentTimeMillis()
+                        Log.v(TAG, "Pong received from client")
+                    }
+                    "stop" -> Log.d(TAG, "Stop requested")
+                    else -> Log.d(TAG, "Unknown type: $type")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "onMessage error", e)
@@ -458,14 +574,16 @@ window.onload = connect;
         }
 
         override fun onPong(pong: NanoWSD.WebSocketFrame?) {
-            Log.v(TAG, "Pong received")
+            lastPongTime = System.currentTimeMillis()
+            Log.v(TAG, "WebSocket pong frame received")
         }
 
         override fun onException(exception: IOException?) {
+            val duration = (System.currentTimeMillis() - connectionTime) / 1000
             if (exception is SocketTimeoutException) {
-                Log.w(TAG, "Socket timeout (should not happen with timeout=0)")
+                Log.w(TAG, "Socket timeout after ${duration}s (should not happen)")
             } else {
-                Log.e(TAG, "Exception: ${exception?.message}")
+                Log.e(TAG, "Exception after ${duration}s: ${exception?.message}")
             }
         }
     }
@@ -491,12 +609,12 @@ window.onload = connect;
 
     override fun start() {
         super.start()
-        startPingTimer()
-        Log.d(TAG, "Server started on port $listeningPort")
+        startKeepAliveTimer()
+        Log.d(TAG, "Server started on port $listeningPort with keep-alive")
     }
 
     override fun stop() {
-        stopPingTimer()
+        stopKeepAliveTimer()
         super.stop()
     }
 }
