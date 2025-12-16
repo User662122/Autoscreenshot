@@ -1,0 +1,14 @@
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent">
+<LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp" android:gravity="center">
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Real-Time Screen Streaming" android:textSize="24sp" android:textStyle="bold" android:gravity="center" android:layout_marginBottom="16dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Stream your screen via WebRTC with H.264 encoding" android:textSize="14sp" android:gravity="center" android:layout_marginBottom="32dp"/>
+<TextView android:id="@+id/statusText" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Screen streaming not active" android:textSize="18sp" android:textColor="#FF5722" android:layout_marginBottom="24dp"/>
+<Button android:id="@+id/startButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Start Screen Streaming" android:textSize="16sp" android:padding="16dp" android:layout_marginBottom="16dp"/>
+<Button android:id="@+id/stopButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Stop Screen Streaming" android:textSize="16sp" android:padding="16dp" android:enabled="false" android:layout_marginBottom="16dp"/>
+<TextView android:id="@+id/urlText" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="14sp" android:textColor="#2196F3" android:gravity="center" android:layout_marginBottom="8dp"/>
+<TextView android:id="@+id/infoText" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="12sp" android:textColor="#4CAF50" android:gravity="center" android:layout_marginBottom="16dp"/>
+<TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Features:" android:textSize="16sp" android:textStyle="bold" android:layout_marginTop="16dp" android:layout_marginBottom="8dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="• Built-in WebSocket server\n• H.264 hardware encoding\n• No external server needed\n• Just open URL in browser\n• 30fps @ 2Mbps\n• Use Termux + Cloudflare for internet" android:textSize="14sp" android:lineSpacingExtra="4dp"/>
+<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="\nTo expose online via Termux:\n1. Install cloudflared in Termux\n2. Run: cloudflared tunnel --url http://127.0.0.1:8080" android:textSize="12sp" android:textColor="#666666" android:layout_marginTop="16dp"/>
+</LinearLayout>
+</ScrollView>
