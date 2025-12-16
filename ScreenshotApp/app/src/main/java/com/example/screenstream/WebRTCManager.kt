@@ -231,7 +231,7 @@ class WebRTCManager(
             )
 
             // Start capture at reasonable resolution
-            capturer!!.startCapture(720, 1280, 30)
+            capturer!!.startCapture(720, 1280, 5)
 
             videoTrack = factory.createVideoTrack("screen_track", videoSource)
             videoTrack!!.setEnabled(true)
