@@ -21,9 +21,10 @@ class WebRTCManager(
     private var capturer: ScreenCapturerAndroid? = null
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
+    private var videoTrack: VideoTrack? = null
 
-    // Combined HTTP + WebSocket server on single port 8080
-    private val server = CombinedServer(8080)
+    // Combined HTTP + WebSocket server on single port 8080 - pass context for assets
+    private val server = CombinedServer(8080, context)
 
     init {
         PeerConnectionFactory.initialize(
@@ -52,6 +53,8 @@ class WebRTCManager(
         // Setup callbacks
         server.onClientConnected = {
             Log.d(TAG, "Client connected, initializing stream...")
+            // Cleanup any existing peer connection before creating new one
+            cleanupPeerConnection()
             createPeer()
             startCapture()
             createOffer()
@@ -69,21 +72,65 @@ class WebRTCManager(
         }
     }
 
+    private fun cleanupPeerConnection() {
+        Log.d(TAG, "Cleaning up existing peer connection...")
+        
+        try {
+            // Stop and dispose video track
+            videoTrack?.setEnabled(false)
+            videoTrack?.dispose()
+            videoTrack = null
+            
+            // Stop screen capture
+            try {
+                capturer?.stopCapture()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping capture: ${e.message}")
+            }
+            capturer?.dispose()
+            capturer = null
+            
+            // Dispose video source
+            videoSource?.dispose()
+            videoSource = null
+            
+            // Dispose surface helper
+            surfaceHelper?.dispose()
+            surfaceHelper = null
+            
+            // Close peer connection
+            peerConnection?.close()
+            peerConnection = null
+            
+            Log.d(TAG, "Peer connection cleanup complete")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during cleanup: ${e.message}")
+        }
+    }
+
     private fun createPeer() {
         Log.d(TAG, "Creating peer connection...")
         
         val iceServers = listOf(
             PeerConnection.IceServer
                 .builder("stun:stun.l.google.com:19302")
+                .createIceServer(),
+            PeerConnection.IceServer
+                .builder("stun:stun1.l.google.com:19302")
                 .createIceServer()
         )
 
+        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+        }
+
         peerConnection = factory.createPeerConnection(
-            PeerConnection.RTCConfiguration(iceServers),
+            rtcConfig,
             object : PeerConnection.Observer {
 
                 override fun onIceCandidate(c: IceCandidate) {
-                    Log.d(TAG, "Sending ICE candidate")
+                    Log.d(TAG, "Sending ICE candidate: ${c.sdpMid}")
                     server.broadcast(
                         JSONObject().apply {
                             put("type", "ice-candidate")
@@ -94,13 +141,29 @@ class WebRTCManager(
                     )
                 }
 
-                override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {}
+                override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) {
+                    Log.d(TAG, "ICE candidates removed: ${candidates.size}")
+                }
                 
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                     Log.d(TAG, "ICE Connection State: $state")
+                    when (state) {
+                        PeerConnection.IceConnectionState.CONNECTED -> {
+                            Log.d(TAG, "ICE Connected - Stream should be active!")
+                        }
+                        PeerConnection.IceConnectionState.FAILED -> {
+                            Log.e(TAG, "ICE Connection Failed")
+                        }
+                        PeerConnection.IceConnectionState.DISCONNECTED -> {
+                            Log.w(TAG, "ICE Disconnected")
+                        }
+                        else -> {}
+                    }
                 }
                 
-                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+                override fun onIceConnectionReceivingChange(receiving: Boolean) {
+                    Log.d(TAG, "ICE Connection Receiving: $receiving")
+                }
                 
                 override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
                     Log.d(TAG, "ICE Gathering State: $state")
@@ -112,16 +175,33 @@ class WebRTCManager(
                 
                 override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
                     Log.d(TAG, "Connection State: $state")
+                    when (state) {
+                        PeerConnection.PeerConnectionState.CONNECTED -> {
+                            Log.d(TAG, "Peer Connected - Streaming!")
+                        }
+                        PeerConnection.PeerConnectionState.FAILED -> {
+                            Log.e(TAG, "Peer Connection Failed")
+                        }
+                        else -> {}
+                    }
                 }
                 
-                override fun onAddStream(stream: MediaStream) {}
-                override fun onRemoveStream(stream: MediaStream) {}
+                override fun onAddStream(stream: MediaStream) {
+                    Log.d(TAG, "Stream added: ${stream.id}")
+                }
+                override fun onRemoveStream(stream: MediaStream) {
+                    Log.d(TAG, "Stream removed: ${stream.id}")
+                }
                 override fun onDataChannel(channel: DataChannel) {}
-                override fun onRenegotiationNeeded() {}
+                override fun onRenegotiationNeeded() {
+                    Log.d(TAG, "Renegotiation needed")
+                }
                 override fun onAddTrack(
                     receiver: RtpReceiver,
                     streams: Array<MediaStream>
-                ) {}
+                ) {
+                    Log.d(TAG, "Track added: ${receiver.track()?.kind()}")
+                }
             }
         )
         
@@ -131,109 +211,134 @@ class WebRTCManager(
     private fun startCapture() {
         Log.d(TAG, "Starting screen capture...")
         
-        surfaceHelper = SurfaceTextureHelper.create("Screen", eglBase.eglBaseContext)
-        videoSource = factory.createVideoSource(false)
+        try {
+            surfaceHelper = SurfaceTextureHelper.create("ScreenCapture", eglBase.eglBaseContext)
+            videoSource = factory.createVideoSource(true) // isScreencast = true
 
-        capturer = ScreenCapturerAndroid(
-            mediaProjectionPermissionIntent,
-            object : MediaProjection.Callback() {
-                override fun onStop() {
-                    Log.e(TAG, "MediaProjection stopped")
+            capturer = ScreenCapturerAndroid(
+                mediaProjectionPermissionIntent,
+                object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        Log.e(TAG, "MediaProjection stopped")
+                    }
                 }
-            }
-        )
+            )
 
-        capturer!!.initialize(
-            surfaceHelper,
-            context,
-            videoSource!!.capturerObserver
-        )
+            capturer!!.initialize(
+                surfaceHelper,
+                context,
+                videoSource!!.capturerObserver
+            )
 
-        capturer!!.startCapture(720, 1280, 30)
+            // Start capture at reasonable resolution
+            capturer!!.startCapture(720, 1280, 30)
 
-        val videoTrack = factory.createVideoTrack("screen", videoSource)
-        peerConnection!!.addTrack(videoTrack)
-        
-        Log.d(TAG, "Screen capture started: 720x1280 @ 30fps")
+            videoTrack = factory.createVideoTrack("screen_track", videoSource)
+            videoTrack!!.setEnabled(true)
+            
+            // Add track to peer connection
+            peerConnection!!.addTrack(videoTrack)
+            
+            Log.d(TAG, "Screen capture started: 720x1280 @ 30fps")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start capture: ${e.message}", e)
+        }
     }
 
     private fun createOffer() {
         Log.d(TAG, "Creating offer...")
         
-        peerConnection!!.createOffer(object : SdpObserver {
+        val constraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
+        }
+        
+        peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
-                Log.d(TAG, "Offer created")
-                peerConnection!!.setLocalDescription(this, sdp)
-                
-                server.broadcast(
-                    JSONObject().apply {
-                        put("type", "offer")
-                        put("sdp", sdp.description)
-                    }.toString()
-                )
-                Log.d(TAG, "Offer sent to client")
+                Log.d(TAG, "Offer created successfully")
+                peerConnection?.setLocalDescription(object : SdpObserver {
+                    override fun onSetSuccess() {
+                        Log.d(TAG, "Local description set")
+                        server.broadcast(
+                            JSONObject().apply {
+                                put("type", "offer")
+                                put("sdp", sdp.description)
+                            }.toString()
+                        )
+                        Log.d(TAG, "Offer sent to client")
+                    }
+                    
+                    override fun onSetFailure(error: String?) {
+                        Log.e(TAG, "Failed to set local description: $error")
+                    }
+                    
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onCreateFailure(p0: String?) {}
+                }, sdp)
             }
 
             override fun onCreateFailure(error: String?) {
                 Log.e(TAG, "Failed to create offer: $error")
             }
             
-            override fun onSetSuccess() {
-                Log.d(TAG, "Local description set")
-            }
-            
-            override fun onSetFailure(error: String?) {
-                Log.e(TAG, "Failed to set local description: $error")
-            }
-        }, MediaConstraints())
+            override fun onSetSuccess() {}
+            override fun onSetFailure(error: String?) {}
+        }, constraints)
     }
 
     private fun handleAnswer(msg: String) {
         Log.d(TAG, "Received answer from client")
         
-        val json = JSONObject(msg)
-        peerConnection!!.setRemoteDescription(
-            object : SdpObserver {
-                override fun onSetSuccess() {
-                    Log.d(TAG, "Remote description set - Connection should be established")
-                }
-                override fun onSetFailure(error: String?) {
-                    Log.e(TAG, "Failed to set remote description: $error")
-                }
-                override fun onCreateSuccess(p0: SessionDescription?) {}
-                override fun onCreateFailure(p0: String?) {}
-            },
-            SessionDescription(
+        try {
+            val json = JSONObject(msg)
+            val sdp = SessionDescription(
                 SessionDescription.Type.ANSWER,
                 json.getString("sdp")
             )
-        )
+            
+            peerConnection?.setRemoteDescription(
+                object : SdpObserver {
+                    override fun onSetSuccess() {
+                        Log.d(TAG, "Remote description set - Connection should be established")
+                    }
+                    override fun onSetFailure(error: String?) {
+                        Log.e(TAG, "Failed to set remote description: $error")
+                    }
+                    override fun onCreateSuccess(p0: SessionDescription?) {}
+                    override fun onCreateFailure(p0: String?) {}
+                },
+                sdp
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling answer: ${e.message}", e)
+        }
     }
 
     private fun handleIce(msg: String) {
         Log.d(TAG, "Received ICE candidate from client")
         
-        val j = JSONObject(msg)
-        peerConnection!!.addIceCandidate(
-            IceCandidate(
+        try {
+            val j = JSONObject(msg)
+            val candidate = IceCandidate(
                 j.getString("sdpMid"),
                 j.getInt("sdpMLineIndex"),
                 j.getString("candidate")
             )
-        )
-        Log.d(TAG, "ICE candidate added")
+            
+            peerConnection?.addIceCandidate(candidate)
+            Log.d(TAG, "ICE candidate added")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling ICE candidate: ${e.message}", e)
+        }
     }
 
     fun release() {
         Log.d(TAG, "Releasing WebRTC resources...")
         
-        capturer?.stopCapture()
-        capturer?.dispose()
-        surfaceHelper?.dispose()
-        videoSource?.dispose()
-        peerConnection?.close()
-        
+        cleanupPeerConnection()
         server.stop()
+        factory.dispose()
+        eglBase.release()
         
         Log.d(TAG, "All resources released")
     }
