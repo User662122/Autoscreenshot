@@ -49,7 +49,7 @@ class NgrokManager(private val context: Context) {
                 val ngrokBinary = findNgrokBinary()
                 if (ngrokBinary == null) {
                     withContext(Dispatchers.Main) {
-                        callback.onError("Failed to find executable ngrok binary. Your device may not support running native binaries.")
+                        callback.onError("Failed to find ngrok binary. Please reinstall the app.")
                     }
                     return@launch
                 }
@@ -60,13 +60,25 @@ class NgrokManager(private val context: Context) {
                     callback.onTunnelProgress("Configuring ngrok...")
                 }
                 
-                configureNgrok(ngrokBinary)
+                val configSuccess = configureNgrok(ngrokBinary)
+                if (!configSuccess) {
+                    withContext(Dispatchers.Main) {
+                        callback.onError("Failed to configure ngrok. Binary may not be executable on this device.")
+                    }
+                    return@launch
+                }
                 
                 withContext(Dispatchers.Main) {
                     callback.onTunnelProgress("Starting HTTP tunnel on port $httpPort...")
                 }
                 
-                startNgrokProcess(ngrokBinary, httpPort)
+                val startSuccess = startNgrokProcess(ngrokBinary, httpPort)
+                if (!startSuccess) {
+                    withContext(Dispatchers.Main) {
+                        callback.onError("Failed to start ngrok process.")
+                    }
+                    return@launch
+                }
                 
                 delay(3000)
                 
@@ -113,15 +125,17 @@ class NgrokManager(private val context: Context) {
         val nativeLibDir = File(context.applicationInfo.nativeLibraryDir)
         val nativeNgrok = File(nativeLibDir, "libngrok.so")
         
-        Log.d(TAG, "Checking native lib dir: ${nativeLibDir.absolutePath}")
-        Log.d(TAG, "libngrok.so exists: ${nativeNgrok.exists()}, canExecute: ${nativeNgrok.canExecute()}")
+        Log.d(TAG, "Native lib dir: ${nativeLibDir.absolutePath}")
+        Log.d(TAG, "Checking libngrok.so - exists: ${nativeNgrok.exists()}, canRead: ${nativeNgrok.canRead()}, canExecute: ${nativeNgrok.canExecute()}")
+        
+        // List all files in native lib dir for debugging
+        nativeLibDir.listFiles()?.forEach { file ->
+            Log.d(TAG, "Native lib file: ${file.name}, size: ${file.length()}")
+        }
         
         if (nativeNgrok.exists()) {
-            // The .so file in native lib dir should be executable by default
-            if (testExecutable(nativeNgrok)) {
-                Log.d(TAG, "Using ngrok from native library directory")
-                return nativeNgrok
-            }
+            Log.d(TAG, "Found libngrok.so in native library directory")
+            return nativeNgrok
         }
         
         // Priority 2: Try to extract from assets to various directories
@@ -147,13 +161,15 @@ class NgrokManager(private val context: Context) {
         return try {
             val ngrokFile = File(targetDir, "ngrok_exec")
             
-            // Check if binary already exists and is executable
+            // Check if binary already exists
+            if (ngrokFile.exists() && ngrokFile.canExecute()) {
+                Log.d(TAG, "Found existing ngrok at ${ngrokFile.absolutePath}")
+                return ngrokFile
+            }
+            
+            // Delete and re-extract
             if (ngrokFile.exists()) {
-                if (testExecutable(ngrokFile)) {
-                    return ngrokFile
-                } else {
-                    ngrokFile.delete()
-                }
+                ngrokFile.delete()
             }
             
             // Determine the correct architecture binary
@@ -192,13 +208,13 @@ class NgrokManager(private val context: Context) {
                 Log.w(TAG, "chmod failed: ${e.message}")
             }
             
-            // Test if we can actually execute it
-            if (testExecutable(ngrokFile)) {
+            if (ngrokFile.canExecute()) {
+                Log.d(TAG, "Extracted ngrok to ${ngrokFile.absolutePath}")
                 return ngrokFile
-            } else {
-                ngrokFile.delete()
-                return null
             }
+            
+            Log.w(TAG, "Extracted file is not executable: ${ngrokFile.absolutePath}")
+            null
             
         } catch (e: Exception) {
             Log.e(TAG, "Error extracting to ${targetDir.absolutePath}: ${e.message}")
@@ -206,51 +222,8 @@ class NgrokManager(private val context: Context) {
         }
     }
     
-    private fun testExecutable(file: File): Boolean {
-        if (!file.exists()) {
-            Log.d(TAG, "File does not exist: ${file.absolutePath}")
-            return false
-        }
-        
-        // Try to run the binary with version command
+    private fun configureNgrok(ngrokBinary: File): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec(arrayOf(file.absolutePath, "version"))
-            
-            // Read output in background to prevent blocking
-            val output = StringBuilder()
-            val error = StringBuilder()
-            
-            Thread {
-                try {
-                    process.inputStream.bufferedReader().forEachLine { output.append(it) }
-                } catch (e: Exception) { }
-            }.start()
-            
-            Thread {
-                try {
-                    process.errorStream.bufferedReader().forEachLine { error.append(it) }
-                } catch (e: Exception) { }
-            }.start()
-            
-            val exitCode = process.waitFor()
-            Log.d(TAG, "ngrok test - exit: $exitCode, output: $output, error: $error")
-            
-            // Consider it executable if it ran without permission denied error
-            exitCode == 0 || output.contains("ngrok") || error.contains("ngrok")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to execute ngrok test at ${file.absolutePath}: ${e.message}")
-            // Check if it's specifically a permission error
-            val isPermissionError = e.message?.contains("Permission denied") == true || 
-                                    e.message?.contains("error=13") == true
-            if (isPermissionError) {
-                Log.e(TAG, "Permission denied for ${file.absolutePath}")
-            }
-            false
-        }
-    }
-    
-    private fun configureNgrok(ngrokBinary: File) {
-        try {
             val process = Runtime.getRuntime().exec(arrayOf(
                 ngrokBinary.absolutePath, 
                 "config", 
@@ -266,15 +239,20 @@ class NgrokManager(private val context: Context) {
                 Log.d(TAG, "ngrok config error: $error")
             }
             
-            process.waitFor(10, TimeUnit.SECONDS)
+            val exitCode = process.waitFor()
+            Log.d(TAG, "ngrok config exit code: $exitCode")
+            
+            // Exit code 0 means success, but ngrok may also return non-zero for "already configured"
+            true
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error configuring ngrok", e)
+            Log.e(TAG, "Error configuring ngrok: ${e.message}", e)
+            false
         }
     }
     
-    private fun startNgrokProcess(ngrokBinary: File, port: Int) {
-        try {
+    private fun startNgrokProcess(ngrokBinary: File, port: Int): Boolean {
+        return try {
             ngrokProcess?.destroy()
             
             ngrokProcess = Runtime.getRuntime().exec(arrayOf(
@@ -304,10 +282,11 @@ class NgrokManager(private val context: Context) {
             }
             
             Log.d(TAG, "ngrok process started for port $port")
+            true
             
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting ngrok process", e)
-            throw e
+            Log.e(TAG, "Error starting ngrok process: ${e.message}", e)
+            false
         }
     }
     
