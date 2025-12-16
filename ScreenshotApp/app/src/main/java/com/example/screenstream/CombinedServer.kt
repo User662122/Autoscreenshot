@@ -1,12 +1,13 @@
 package com.example.screenstream
 
+import android.content.Context
 import android.util.Log
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
 import org.json.JSONObject
 import java.io.IOException
 
-class CombinedServer(port: Int) : NanoWSD(port) {
+class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(port) {
 
     private val TAG = "CombinedServer"
     private val clients = mutableListOf<WebSocketClient>()
@@ -16,7 +17,24 @@ class CombinedServer(port: Int) : NanoWSD(port) {
     var onIceCandidateReceived: ((String) -> Unit)? = null
     var onClientConnected: (() -> Unit)? = null
 
-    private val htmlPage = """
+    private fun loadHtmlPage(): String {
+        // Try to load from assets first
+        context?.let {
+            try {
+                return it.assets.open("viewer.html").bufferedReader().use { reader ->
+                    reader.readText()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load viewer.html from assets", e)
+            }
+        }
+        
+        // Fallback to embedded HTML
+        return getEmbeddedHtml()
+    }
+
+    private fun getEmbeddedHtml(): String {
+        return """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -160,7 +178,7 @@ class CombinedServer(port: Int) : NanoWSD(port) {
     </style>
 </head>
 <body>
-    <div class="container">
+<div class="container">
         <h1>Android Screen Stream</h1>
         <div id="status" class="status waiting">
             <span class="loading"></span> Connecting...
@@ -194,6 +212,255 @@ class CombinedServer(port: Int) : NanoWSD(port) {
             <div class="debug" id="debugLog"></div>
         </div>
     </div>
+
+    <script type="text/javascript">
+        var video = document.getElementById('remoteVideo');
+        var status = document.getElementById('status');
+        var statusText = document.getElementById('statusText');
+        var stopBtn = document.getElementById('stopBtn');
+        var connectionStatus = document.getElementById('connectionStatus');
+        var resolution = document.getElementById('resolution');
+        var frameRate = document.getElementById('frameRate');
+        var wsUrlElement = document.getElementById('wsUrl');
+        var debugLog = document.getElementById('debugLog');
+        var playOverlay = document.getElementById('playOverlay');
+
+        var config = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        var ws = null;
+        var pc = null;
+        var pendingIceCandidates = [];
+        var reconnectAttempts = 0;
+        var MAX_RECONNECT_ATTEMPTS = 5;
+
+        function debugMessage(msg) {
+            console.log(msg);
+            var line = document.createElement('div');
+            line.className = 'debug-line';
+            line.textContent = new Date().toLocaleTimeString() + ': ' + msg;
+            debugLog.appendChild(line);
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
+
+        function updateStatus(msg, statusType) {
+            statusType = statusType || 'waiting';
+            status.innerHTML = msg;
+            status.className = 'status ' + statusType;
+            statusText.textContent = msg.replace(/<[^>]*>/g, '');
+        }
+
+        video.onloadedmetadata = function() {
+            debugMessage('Video metadata: ' + video.videoWidth + 'x' + video.videoHeight);
+        };
+
+        video.onplaying = function() {
+            debugMessage('Video is playing');
+            playOverlay.classList.add('hidden');
+            updateStatus('Streaming Active!', 'streaming');
+        };
+
+        video.onpause = function() {
+            debugMessage('Video paused');
+        };
+
+        video.onerror = function(e) {
+            debugMessage('Video error: ' + (video.error ? video.error.message : 'unknown'));
+        };
+
+        video.onstalled = function() {
+            debugMessage('Video stalled');
+        };
+
+        video.onwaiting = function() {
+            debugMessage('Video waiting for data');
+        };
+
+        playOverlay.onclick = function() {
+            video.play().then(function() {
+                debugMessage('Manual play started');
+                playOverlay.classList.add('hidden');
+            }).catch(function(e) {
+                debugMessage('Manual play failed: ' + e.message);
+            });
+        };
+
+        video.onclick = function() {
+            if (video.paused && video.srcObject) {
+                video.play().catch(function(e) {
+                    debugMessage('Play on click failed: ' + e.message);
+                });
+            }
+        };
+
+        function tryPlayVideo() {
+            if (!video.srcObject) return;
+            
+            var playPromise = video.play();
+            if (playPromise !== undefined) {
+                playPromise.then(function() {
+                    debugMessage('Video autoplay started');
+                    playOverlay.classList.add('hidden');
+                    updateStatus('Streaming Active!', 'streaming');
+                }).catch(function(error) {
+                    debugMessage('Autoplay blocked: ' + error.message);
+                    playOverlay.classList.remove('hidden');
+                    updateStatus('Tap to play video', 'connected');
+                });
+            }
+        }
+function connectWebSocket() {
+            var host = window.location.hostname;
+            var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+            var wsUrl = protocol + '//' + host + ':' + port;
+
+            wsUrlElement.textContent = wsUrl;
+            debugMessage('Connecting to: ' + wsUrl);
+
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function() {
+                    debugMessage('WebSocket connected');
+                    reconnectAttempts = 0;
+                    pendingIceCandidates = [];
+                    updateStatus('Connected - Waiting for stream...', 'connected');
+                    connectionStatus.textContent = 'Connected';
+                    ws.send(JSON.stringify({ type: 'client-connected' }));
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        var data = JSON.parse(event.data);
+                        debugMessage('Received: ' + data.type);
+                        handleMessage(data);
+                    } catch (error) {
+                        debugMessage('Parse error: ' + error.message);
+                    }
+                };
+
+                ws.onerror = function(error) {
+                    debugMessage('WebSocket error');
+                    updateStatus('Connection error', 'error');
+                    connectionStatus.textContent = 'Error';
+                };
+
+                ws.onclose = function(event) {
+                    debugMessage('WebSocket closed: ' + event.code);
+                    if (!event.wasClean && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        reconnectAttempts++;
+                        updateStatus('Reconnecting (' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')...', 'waiting');
+                        setTimeout(connectWebSocket, 2000);
+                        return;
+                    }
+                    updateStatus('Disconnected', 'error');
+                    connectionStatus.textContent = 'Disconnected';
+                    cleanup();
+                };
+            } catch (error) {
+                debugMessage('Connection failed: ' + error.message);
+                updateStatus('Failed to connect: ' + error.message, 'error');
+            }
+        }
+
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'offer':
+                    handleOffer(data);
+                    break;
+                case 'ice-candidate':
+                    handleIceCandidate(data);
+                    break;
+            }
+        }
+
+        function handleOffer(data) {
+            debugMessage('Processing offer...');
+
+            pc = new RTCPeerConnection(config);
+
+            pc.onicecandidate = function(event) {
+                if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        sdpMid: event.candidate.sdpMid,
+                        sdpMLineIndex: event.candidate.sdpMLineIndex,
+                        candidate: event.candidate.candidate
+                    }));
+                    debugMessage('Sent ICE candidate');
+                }
+            };
+
+            pc.ontrack = function(event) {
+                debugMessage('Got track: ' + event.track.kind);
+                
+                if (event.streams && event.streams[0]) {
+                    video.srcObject = event.streams[0];
+                    debugMessage('Stream attached to video');
+                } else if (event.track) {
+                    var stream = new MediaStream();
+                    stream.addTrack(event.track);
+                    video.srcObject = stream;
+                    debugMessage('Track attached to new stream');
+                }
+
+                connectionStatus.textContent = 'Streaming';
+                stopBtn.disabled = false;
+
+                setTimeout(tryPlayVideo, 100);
+
+                if (event.track.kind === 'video') {
+                    event.track.onended = function() {
+                        debugMessage('Video track ended');
+                    };
+                    
+                    event.track.onmute = function() {
+                        debugMessage('Video track muted');
+                    };
+                    
+                    event.track.onunmute = function() {
+                        debugMessage('Video track unmuted');
+                        tryPlayVideo();
+                    };
+
+                    setTimeout(function() {
+                        var settings = event.track.getSettings();
+                        if (settings.width && settings.height) {
+                            resolution.textContent = settings.width + 'x' + settings.height;
+                            debugMessage('Resolution: ' + settings.width + 'x' + settings.height);
+                        }
+                        if (settings.frameRate) {
+                            frameRate.textContent = Math.round(settings.frameRate) + ' fps';
+                        }
+                    }, 1000);
+                }
+            };
+
+            pc.onconnectionstatechange = function() {
+                debugMessage('Connection state: ' + pc.connectionState);
+                switch (pc.connectionState) {
+                    case 'connected':
+                        connectionStatus.textContent = 'Connected';
+                        setTimeout(tryPlayVideo, 500);
+                        break;
+                    case 'failed':
+                    case 'disconnected':
+                        connectionStatus.textContent = 'Failed';
+                        updateStatus('Connection lost', 'error');
+                        break;
+                }
+            };
+
+            pc.oniceconnectionstatechange = function() {
+                debugMessage('ICE state: ' + pc.iceConnectionState);
+            };
+
+            pc.setRemoteDescription(new RTCSessionDescription({
                 type: 'offer',
                 sdp: data.sdp
             })).then(function() {
@@ -231,8 +498,7 @@ class CombinedServer(port: Int) : NanoWSD(port) {
                 updateStatus('Setup failed: ' + error.message, 'error');
             });
         }
-
-        function handleIceCandidate(data) {
+function handleIceCandidate(data) {
             if (!data.candidate) return;
 
             if (!pc || !pc.remoteDescription) {
@@ -291,7 +557,8 @@ class CombinedServer(port: Int) : NanoWSD(port) {
     </script>
 </body>
 </html>
-    """.trimIndent()
+        """.trimIndent()
+    }
 
     inner class WebSocketClient(handshake: NanoHTTPD.IHTTPSession) : NanoWSD.WebSocket(handshake) {
         
@@ -346,11 +613,10 @@ class CombinedServer(port: Int) : NanoWSD(port) {
         return NanoHTTPD.newFixedLengthResponse(
             NanoHTTPD.Response.Status.OK,
             "text/html",
-            htmlPage
+            loadHtmlPage()
         )
     }
-
-    fun broadcast(message: String) {
+fun broadcast(message: String) {
         synchronized(clients) {
             val disconnected = mutableListOf<WebSocketClient>()
             
@@ -363,12 +629,12 @@ class CombinedServer(port: Int) : NanoWSD(port) {
                         disconnected.add(client)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to send to client", e)
+                    Log.e(TAG, "Broadcast error", e)
                     disconnected.add(client)
                 }
             }
             
-            disconnected.forEach { clients.remove(it) }
+            clients.removeAll(disconnected)
         }
     }
 }
