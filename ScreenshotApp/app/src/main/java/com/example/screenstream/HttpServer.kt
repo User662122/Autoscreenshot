@@ -292,8 +292,10 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
 
         function connectWebSocket() {
             var host = window.location.hostname;
-            var wsPort = '8081';
-            var wsUrl = 'ws://' + host + ':' + wsPort;
+            var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            
+            // Always use port 8081
+            var wsUrl = protocol + '//' + host + ':8081';
 
             wsUrlElement.textContent = wsUrl;
             debugMessage('Connecting to: ' + wsUrl);
@@ -340,7 +342,7 @@ class HttpServer(port: Int) : NanoHTTPD(port) {
                 };
             } catch (error) {
                 debugMessage('Connection failed: ' + error.message);
-                updateStatus('Failed to connect', 'error');
+                updateStatus('Failed to connect: ' + error.message, 'error');
             }
         }
 
