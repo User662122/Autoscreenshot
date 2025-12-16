@@ -71,6 +71,7 @@ dependencies {
     // WebSocket Server
     implementation("org.java-websocket:Java-WebSocket:1.5.3")
     
-    // NanoHTTPD for HTTP server
+    // NanoHTTPD for HTTP server + WebSocket support
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 }
