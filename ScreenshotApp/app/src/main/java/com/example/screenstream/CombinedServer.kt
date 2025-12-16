@@ -615,13 +615,12 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
             }
             
             val connectionDuration = System.currentTimeMillis() - connectionTime
-            val wasActive = connectionDuration > 1000 // Connection was active for more than 1 second
+            val durationSec = connectionDuration / 1000
+            val wasActive = connectionDuration > 1000
             
-            // Get close code details - use the CloseCode enum directly
-            val closeReason = reason ?: "Unknown reason"
-            val closeCodeName = code?.name ?: "UNKNOWN"
+            val closeReason = reason ?: "No reason provided"
+            val closeCodeName = code?.name ?: "NULL"
             
-            // Determine numeric code from CloseCode enum (only include codes that exist in NanoHTTPD)
             val closeCodeValue = when (code) {
                 NanoWSD.WebSocketFrame.CloseCode.NormalClosure -> 1000
                 NanoWSD.WebSocketFrame.CloseCode.GoingAway -> 1001
@@ -635,30 +634,136 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                 else -> -1
             }
             
-            // Show toast only for error closures (not normal closures)
-            if (wasActive && (closeCodeValue != 1000 && closeCodeValue != 1001)) {
-                val errorMessage = when (closeCodeValue) {
-                    1002 -> "WebSocket Error: Protocol error - Invalid WebSocket frame received"
-                    1003 -> "WebSocket Error: Unsupported data type received"
-                    1006 -> "WebSocket Error: Connection lost unexpectedly (Code 1006) - Network or tunnel issue"
-                    1007 -> "WebSocket Error: Invalid frame payload data"
-                    1008 -> "WebSocket Error: Policy violation"
-                    1009 -> "WebSocket Error: Message too large"
-                    1011 -> "WebSocket Error (1011): Internal server error - ${if (closeReason != "Unknown reason") "Reason: $closeReason - " else ""}Server may have crashed or encountered unexpected condition. Check server logs for details."
-                    -1 -> "WebSocket closed abnormally after ${connectionDuration / 1000}s - No close code received (${closeCodeName})"
-                    else -> "WebSocket closed unexpectedly (Code: $closeCodeValue)${if (closeReason != "Unknown reason") " - Reason: $closeReason" else ""} after ${connectionDuration / 1000}s"
+            // Comprehensive logging for ALL closures
+            Log.w(TAG, """
+                ═══════════════════════════════════════════════════════
+                WebSocket CLOSED - Detailed Analysis
+                ═══════════════════════════════════════════════════════
+                Close Code: $closeCodeValue ($closeCodeName)
+                Reason: "$closeReason"
+                Initiated By: ${if (initiatedByRemote) "REMOTE (Client/Cloudflare)" else "LOCAL (Server)"}
+                Connection Duration: ${durationSec}s (${if (wasActive) "Active" else "Brief"})
+                Was Active: $wasActive
+                Remaining Clients: ${clients.size}
+                ═══════════════════════════════════════════════════════
+            """.trimIndent())
+            
+            // PRIORITY: Handle 1011 Internal Server Error with maximum detail
+            if (closeCodeValue == 1011) {
+                val detailedError = buildString {
+                    append("🔴 WebSocket Error 1011 - INTERNAL SERVER ERROR\n")
+                    append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                    append("Duration: ${durationSec}s\n")
+                    append("Reason: $closeReason\n")
+                    append("Initiated: ${if (initiatedByRemote) "Remote" else "Server"}\n")
+                    append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                    append("CAUSE: Handler terminated without proper closure\n")
+                    append("This means:\n")
+                    append("• Message handler crashed unexpectedly\n")
+                    append("• Exception in onMessage() or onOpen()\n")
+                    append("• Server thread died prematurely\n")
+                    append("• Critical: Check for null pointer exceptions\n")
+                    append("• Critical: Check for unhandled exceptions in handlers\n")
+                    append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                    append("ACTION: Check logcat for exceptions immediately before this")
                 }
                 
-                showToast(errorMessage)
-            } else if (closeCodeValue == 1006 && !wasActive) {
-                // Connection failed immediately
-                showToast("WebSocket failed to connect - Network unreachable or server not responding")
-            } else if (closeCodeValue == 1011) {
-                // Always show 1011 errors even if connection was brief
-                showToast("WebSocket Error (1011): Internal server error - ${if (closeReason != "Unknown reason") "Reason: $closeReason - " else ""}Server encountered unexpected condition after ${connectionDuration / 1000}s")
+                Log.e(TAG, detailedError)
+                showToast(detailedError)
+                return
             }
             
-            Log.d(TAG, "WebSocket client disconnected. Remaining: ${clients.size}")
+            // Handle other error codes
+            when (closeCodeValue) {
+                1006 -> {
+                    val msg = buildString {
+                        append("⚠️ WebSocket 1006 - ABNORMAL CLOSURE\n")
+                        append("Duration: ${durationSec}s\n")
+                        append("Reason: $closeReason\n")
+                        if (!wasActive) {
+                            append("CAUSE: Connection failed immediately\n")
+                            append("• Cloudflare tunnel may be down\n")
+                            append("• Port 8080 not reachable\n")
+                            append("• Server not responding to Cloudflare\n")
+                        } else {
+                            append("CAUSE: Network interruption\n")
+                            append("• Connection lost unexpectedly\n")
+                            append("• Tunnel disconnected mid-stream\n")
+                            append("• Client network dropped\n")
+                        }
+                    }
+                    Log.w(TAG, msg)
+                    showToast(msg)
+                }
+                
+                1002 -> {
+                    val msg = "⚠️ WebSocket 1002 - PROTOCOL ERROR\n" +
+                            "Reason: $closeReason\n" +
+                            "CAUSE: Invalid WebSocket frame received\n" +
+                            "• Malformed message from client\n" +
+                            "• Protocol mismatch"
+                    Log.w(TAG, msg)
+                    if (wasActive) showToast(msg)
+                }
+                
+                1003 -> {
+                    val msg = "⚠️ WebSocket 1003 - UNSUPPORTED DATA\n" +
+                            "Reason: $closeReason\n" +
+                            "CAUSE: Received unsupported data type\n" +
+                            "• Binary data sent when text expected\n" +
+                            "• Wrong message format"
+                    Log.w(TAG, msg)
+                    if (wasActive) showToast(msg)
+                }
+                
+                1007 -> {
+                    val msg = "⚠️ WebSocket 1007 - INVALID PAYLOAD\n" +
+                            "Reason: $closeReason\n" +
+                            "CAUSE: Frame payload data was invalid\n" +
+                            "• Corrupted message data\n" +
+                            "• UTF-8 encoding error"
+                    Log.w(TAG, msg)
+                    if (wasActive) showToast(msg)
+                }
+                
+                1009 -> {
+                    val msg = "⚠️ WebSocket 1009 - MESSAGE TOO BIG\n" +
+                            "Reason: $closeReason\n" +
+                            "CAUSE: Message exceeded size limit\n" +
+                            "• SDP or ICE candidate too large\n" +
+                            "• Consider message chunking"
+                    Log.w(TAG, msg)
+                    if (wasActive) showToast(msg)
+                }
+                
+                -1 -> {
+                    val msg = "⚠️ WebSocket CLOSED - NULL CODE\n" +
+                            "CodeName: $closeCodeName\n" +
+                            "Reason: $closeReason\n" +
+                            "Duration: ${durationSec}s\n" +
+                            "CAUSE: No close code received\n" +
+                            "• Abnormal termination\n" +
+                            "• Handler may have crashed"
+                    Log.w(TAG, msg)
+                    if (wasActive) showToast(msg)
+                }
+                
+                1000, 1001 -> {
+                    // Normal closure - just log, no toast
+                    Log.i(TAG, "WebSocket closed normally (Code: $closeCodeValue)")
+                }
+                
+                else -> {
+                    val msg = "⚠️ WebSocket $closeCodeValue - UNEXPECTED CODE\n" +
+                            "Reason: $closeReason\n" +
+                            "Duration: ${durationSec}s\n" +
+                            "CAUSE: Rare or custom close code"
+                    Log.w(TAG, msg)
+                    if (wasActive) showToast(msg)
+                }
+            }
+            
+            Log.d(TAG, "WebSocket cleanup complete. Remaining: ${clients.size}")
         }
 
         override fun onMessage(message: NanoWSD.WebSocketFrame) {
