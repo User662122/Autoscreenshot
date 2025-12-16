@@ -22,9 +22,8 @@ class WebRTCManager(
     private var surfaceHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
 
-    // Separate ports for HTTP and WebSocket
-    private val httpServer = HttpServer(8080)
-    private val wsServer = WebSocketSignalingServer(8081, context)
+    // Combined HTTP + WebSocket server on single port 8080
+    private val server = CombinedServer(8080)
 
     init {
         PeerConnectionFactory.initialize(
@@ -46,35 +45,27 @@ class WebRTCManager(
             )
             .createPeerConnectionFactory()
 
-        startServers()
+        startServer()
     }
 
-    private fun startServers() {
-        // Start HTTP server for web page
-        try {
-            httpServer.start()
-            Log.d(TAG, "✓ HTTP server started on port 8080")
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to start HTTP server", e)
-        }
-
-        // Setup WebSocket callbacks
-        wsServer.onClientConnected = {
-            Log.d(TAG, "🔗 Client connected, initializing stream...")
+    private fun startServer() {
+        // Setup callbacks
+        server.onClientConnected = {
+            Log.d(TAG, "Client connected, initializing stream...")
             createPeer()
             startCapture()
             createOffer()
         }
 
-        wsServer.onAnswerReceived = { handleAnswer(it) }
-        wsServer.onIceCandidateReceived = { handleIce(it) }
+        server.onAnswerReceived = { handleAnswer(it) }
+        server.onIceCandidateReceived = { handleIce(it) }
         
-        // Start WebSocket server
+        // Start combined server
         try {
-            wsServer.start()
-            Log.d(TAG, "✓ WebSocket server started on port 8081")
+            server.start()
+            Log.d(TAG, "Combined HTTP+WebSocket server started on port 8080")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to start WebSocket server", e)
+            Log.e(TAG, "Failed to start server", e)
         }
     }
 
@@ -92,8 +83,8 @@ class WebRTCManager(
             object : PeerConnection.Observer {
 
                 override fun onIceCandidate(c: IceCandidate) {
-                    Log.d(TAG, "📡 Sending ICE candidate")
-                    wsServer.broadcast(
+                    Log.d(TAG, "Sending ICE candidate")
+                    server.broadcast(
                         JSONObject().apply {
                             put("type", "ice-candidate")
                             put("sdpMid", c.sdpMid)
@@ -134,7 +125,7 @@ class WebRTCManager(
             }
         )
         
-        Log.d(TAG, "✓ Peer connection created")
+        Log.d(TAG, "Peer connection created")
     }
 
     private fun startCapture() {
@@ -163,7 +154,7 @@ class WebRTCManager(
         val videoTrack = factory.createVideoTrack("screen", videoSource)
         peerConnection!!.addTrack(videoTrack)
         
-        Log.d(TAG, "✓ Screen capture started: 720x1280 @ 30fps")
+        Log.d(TAG, "Screen capture started: 720x1280 @ 30fps")
     }
 
     private fun createOffer() {
@@ -171,43 +162,43 @@ class WebRTCManager(
         
         peerConnection!!.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
-                Log.d(TAG, "✓ Offer created")
+                Log.d(TAG, "Offer created")
                 peerConnection!!.setLocalDescription(this, sdp)
                 
-                wsServer.broadcast(
+                server.broadcast(
                     JSONObject().apply {
                         put("type", "offer")
                         put("sdp", sdp.description)
                     }.toString()
                 )
-                Log.d(TAG, "📤 Offer sent to client")
+                Log.d(TAG, "Offer sent to client")
             }
 
             override fun onCreateFailure(error: String?) {
-                Log.e(TAG, "❌ Failed to create offer: $error")
+                Log.e(TAG, "Failed to create offer: $error")
             }
             
             override fun onSetSuccess() {
-                Log.d(TAG, "✓ Local description set")
+                Log.d(TAG, "Local description set")
             }
             
             override fun onSetFailure(error: String?) {
-                Log.e(TAG, "❌ Failed to set local description: $error")
+                Log.e(TAG, "Failed to set local description: $error")
             }
         }, MediaConstraints())
     }
 
     private fun handleAnswer(msg: String) {
-        Log.d(TAG, "📥 Received answer from client")
+        Log.d(TAG, "Received answer from client")
         
         val json = JSONObject(msg)
         peerConnection!!.setRemoteDescription(
             object : SdpObserver {
                 override fun onSetSuccess() {
-                    Log.d(TAG, "✓ Remote description set - Connection should be established")
+                    Log.d(TAG, "Remote description set - Connection should be established")
                 }
                 override fun onSetFailure(error: String?) {
-                    Log.e(TAG, "❌ Failed to set remote description: $error")
+                    Log.e(TAG, "Failed to set remote description: $error")
                 }
                 override fun onCreateSuccess(p0: SessionDescription?) {}
                 override fun onCreateFailure(p0: String?) {}
@@ -220,7 +211,7 @@ class WebRTCManager(
     }
 
     private fun handleIce(msg: String) {
-        Log.d(TAG, "📥 Received ICE candidate from client")
+        Log.d(TAG, "Received ICE candidate from client")
         
         val j = JSONObject(msg)
         peerConnection!!.addIceCandidate(
@@ -230,7 +221,7 @@ class WebRTCManager(
                 j.getString("candidate")
             )
         )
-        Log.d(TAG, "✓ ICE candidate added")
+        Log.d(TAG, "ICE candidate added")
     }
 
     fun release() {
@@ -242,9 +233,8 @@ class WebRTCManager(
         videoSource?.dispose()
         peerConnection?.close()
         
-        wsServer.stop()
-        httpServer.stop()
+        server.stop()
         
-        Log.d(TAG, "✓ All resources released")
+        Log.d(TAG, "All resources released")
     }
 }
