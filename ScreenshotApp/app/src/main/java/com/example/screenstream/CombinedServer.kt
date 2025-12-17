@@ -15,12 +15,12 @@ import java.util.Timer
 import java.util.TimerTask
 
 /**
- * FIXED VERSION v4 - Fixes Cloudflare Tunnel timeout (~100 seconds)
+ * FIXED VERSION v5 - Infinite WebSocket reconnection until stopped
  * 
- * Issue: Cloudflare tunnels have idle connection timeout (~100 seconds)
- * WebSocket ping frames may not count as traffic for Cloudflare.
- * 
- * Fix: Send actual JSON text messages as keep-alive that Cloudflare recognizes as traffic
+ * Features:
+ * - Infinite reconnection attempts with 100ms interval
+ * - Only stops reconnecting when explicitly stopped by user
+ * - Cloudflare tunnel timeout protection (~100 seconds)
  */
 class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(port) {
 
@@ -28,8 +28,6 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
     private val clients = mutableListOf<WebSocketClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
     
-    // Keep-alive must be frequent enough to beat Cloudflare's ~100s timeout
-    // Using 30 seconds to be safe
     private var keepAliveTimer: Timer? = null
     private val KEEP_ALIVE_INTERVAL = 30000L // 30 seconds
     private val KEEP_ALIVE_INITIAL_DELAY = 5000L // Start after 5 seconds
@@ -47,9 +45,6 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
         }
     }
 
-    /**
-     * CRITICAL: Override to set infinite socket timeout
-     */
     override fun createClientHandler(finalAccept: Socket, inputStream: java.io.InputStream): ClientHandler {
         try {
             finalAccept.soTimeout = 0 // Infinite timeout
@@ -81,10 +76,6 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
         }
     }
 
-    /**
-     * Send actual JSON text message as keep-alive
-     * This ensures Cloudflare sees traffic and doesn't timeout
-     */
     private fun sendKeepAliveToAllClients() {
         val keepAliveMessage = JSONObject().apply {
             put("type", "ping")
@@ -96,7 +87,6 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
             clients.forEach { client ->
                 try {
                     if (client.isOpen) {
-                        // Send both: WebSocket ping frame AND JSON text message
                         client.ping(byteArrayOf(0x01))
                         client.send(keepAliveMessage)
                         Log.v(TAG, "Keep-alive sent")
@@ -168,6 +158,7 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
         .status.connected { background: #d4edda; color: #155724; }
         .status.streaming { background: #d1ecf1; color: #0c5460; }
         .status.error { background: #f8d7da; color: #721c24; }
+        .status.reconnecting { background: #ffeaa7; color: #d63031; }
         .video-container {
             position: relative;
             background: #000;
@@ -265,6 +256,10 @@ class CombinedServer(port: Int, private val context: Context? = null) : NanoWSD(
                 <div class="stat-value" id="pingCount">0</div>
                 <div class="stat-label">Pings</div>
             </div>
+            <div class="stat-item">
+                <div class="stat-value" id="reconnectCount">0</div>
+                <div class="stat-label">Reconnects</div>
+            </div>
         </div>
         <div class="debug" id="debugLog"></div>
     </div>
@@ -277,17 +272,19 @@ var stopBtn = document.getElementById('stopBtn');
 var connectionStatus = document.getElementById('connectionStatus');
 var resolution = document.getElementById('resolution');
 var pingCountEl = document.getElementById('pingCount');
+var reconnectCountEl = document.getElementById('reconnectCount');
 var connTimeEl = document.getElementById('connTime');
 var debugLog = document.getElementById('debugLog');
 var playOverlay = document.getElementById('playOverlay');
 
 var config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-var ws = null, pc = null, pendingIceCandidates = [], reconnectAttempts = 0;
+var ws = null, pc = null, pendingIceCandidates = [];
 var pingCount = 0;
+var reconnectCount = 0;
 var connStartTime = 0;
 var connTimer = null;
-
-// Client-side keep-alive: send pong every 25 seconds
+var reconnectTimer = null;
+var shouldReconnect = true; // Flag to control reconnection
 var clientKeepAliveInterval = null;
 
 function log(msg) {
@@ -296,7 +293,6 @@ function log(msg) {
     line.textContent = new Date().toLocaleTimeString() + ': ' + msg;
     debugLog.appendChild(line);
     debugLog.scrollTop = debugLog.scrollHeight;
-    // Keep only last 50 lines
     while (debugLog.children.length > 50) {
         debugLog.removeChild(debugLog.firstChild);
     }
@@ -333,7 +329,7 @@ function startClientKeepAlive() {
             ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
             log('Client keep-alive sent');
         }
-    }, 25000); // Every 25 seconds
+    }, 25000);
 }
 
 function stopClientKeepAlive() {
@@ -353,60 +349,98 @@ playOverlay.onclick = function() {
     video.play().then(function() { playOverlay.classList.add('hidden'); });
 };
 
+function scheduleReconnect() {
+    if (!shouldReconnect) {
+        log('Reconnection disabled - not reconnecting');
+        return;
+    }
+    
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+    }
+    
+    reconnectCount++;
+    reconnectCountEl.textContent = reconnectCount;
+    log('Scheduling reconnect #' + reconnectCount + ' in 100ms...');
+    updateStatus('Reconnecting... (Attempt #' + reconnectCount + ')', 'reconnecting');
+    
+    reconnectTimer = setTimeout(function() {
+        if (shouldReconnect) {
+            connect();
+        }
+    }, 100); // 100ms reconnect interval
+}
+
 function connect() {
+    // Clear any pending reconnect timer
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    
     var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     var port = location.port || (location.protocol === 'https:' ? '443' : '80');
     var url = protocol + '//' + location.hostname + ':' + port;
     log('Connecting: ' + url);
 
-    ws = new WebSocket(url);
-    
-    ws.onopen = function() {
-        log('Connected');
-        reconnectAttempts = 0;
-        pingCount = 0;
-        pingCountEl.textContent = '0';
-        connectionStatus.textContent = 'Connected';
-        startConnTimer();
-        startClientKeepAlive();
-        ws.send(JSON.stringify({ type: 'client-connected' }));
-    };
-    
-    ws.onmessage = function(e) {
-        try {
-            var data = JSON.parse(e.data);
-            
-            // Handle ping/pong silently
-            if (data.type === 'ping') {
-                pingCount++;
-                pingCountEl.textContent = pingCount;
-                // Respond with pong
-                ws.send(JSON.stringify({ type: 'pong', timestamp: data.timestamp }));
-                return;
-            }
-            
-            log('Received: ' + data.type);
-            if (data.type === 'offer') handleOffer(data);
-            else if (data.type === 'ice-candidate') handleIce(data);
-        } catch (err) { log('Parse error: ' + err); }
-    };
-    
-    ws.onclose = function(e) {
-        log('Closed: code=' + e.code + ', reason=' + (e.reason || 'none'));
-        stopConnTimer();
-        stopClientKeepAlive();
-        connectionStatus.textContent = 'Disconnected';
+    try {
+        ws = new WebSocket(url);
         
-        if (!e.wasClean && reconnectAttempts < 5) {
-            reconnectAttempts++;
-            updateStatus('Reconnecting (' + reconnectAttempts + '/5)...', 'waiting');
-            setTimeout(connect, 2000);
-        } else {
-            updateStatus('Disconnected (code: ' + e.code + ')', 'error');
+        ws.onopen = function() {
+            log('Connected successfully');
+            pingCount = 0;
+            pingCountEl.textContent = '0';
+            connectionStatus.textContent = 'Connected';
+            startConnTimer();
+            startClientKeepAlive();
+            ws.send(JSON.stringify({ type: 'client-connected' }));
+            updateStatus('Connected - Waiting for stream...', 'connected');
+        };
+        
+        ws.onmessage = function(e) {
+            try {
+                var data = JSON.parse(e.data);
+                
+                if (data.type === 'ping') {
+                    pingCount++;
+                    pingCountEl.textContent = pingCount;
+                    ws.send(JSON.stringify({ type: 'pong', timestamp: data.timestamp }));
+                    return;
+                }
+                
+                log('Received: ' + data.type);
+                if (data.type === 'offer') handleOffer(data);
+                else if (data.type === 'ice-candidate') handleIce(data);
+            } catch (err) { 
+                log('Parse error: ' + err); 
+            }
+        };
+        
+        ws.onclose = function(e) {
+            log('WebSocket closed: code=' + e.code + ', reason=' + (e.reason || 'none'));
+            stopConnTimer();
+            stopClientKeepAlive();
+            connectionStatus.textContent = 'Disconnected';
+            
+            // Always try to reconnect if shouldReconnect is true
+            if (shouldReconnect) {
+                scheduleReconnect();
+            } else {
+                updateStatus('Disconnected by user', 'error');
+            }
+        };
+        
+        ws.onerror = function(err) { 
+            log('WebSocket error'); 
+            // Error will trigger onclose, which will handle reconnection
+        };
+        
+    } catch (error) {
+        log('Connection attempt failed: ' + error.message);
+        if (shouldReconnect) {
+            scheduleReconnect();
         }
-    };
-    
-    ws.onerror = function() { log('WebSocket error'); };
+    }
 }
 
 function handleOffer(data) {
@@ -414,7 +448,7 @@ function handleOffer(data) {
     pc = new RTCPeerConnection(config);
     
     pc.onicecandidate = function(e) {
-        if (e.candidate && ws.readyState === 1) {
+        if (e.candidate && ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
                 type: 'ice-candidate',
                 sdpMid: e.candidate.sdpMid,
@@ -460,8 +494,12 @@ function handleOffer(data) {
         })
         .then(function(answer) { return pc.setLocalDescription(answer); })
         .then(function() {
-            ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription.sdp }));
-            log('Answer sent');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription.sdp }));
+                log('Answer sent');
+            } else {
+                log('Cannot send answer - WebSocket not open');
+            }
         })
         .catch(function(err) { log('Error: ' + err); });
 }
@@ -476,6 +514,15 @@ function handleIce(data) {
 }
 
 stopBtn.onclick = function() {
+    log('Stop button clicked - disabling reconnection');
+    shouldReconnect = false; // Disable reconnection
+    
+    // Clear reconnect timer if pending
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    
     if (pc) { pc.close(); pc = null; }
     if (video.srcObject) { 
         video.srcObject.getTracks().forEach(function(t) { t.stop(); }); 
@@ -484,14 +531,27 @@ stopBtn.onclick = function() {
     stopBtn.disabled = true;
     stopConnTimer();
     stopClientKeepAlive();
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stop' }));
-    updateStatus('Stopped', 'waiting');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'stop' }));
+        ws.close();
+    }
+    ws = null;
+    updateStatus('Stopped by user', 'waiting');
+    connectionStatus.textContent = 'Stopped';
 };
 
-window.onload = connect;
+window.onload = function() {
+    shouldReconnect = true; // Enable reconnection on page load
+    reconnectCount = 0;
+    reconnectCountEl.textContent = '0';
+    connect();
+};
+
 window.onbeforeunload = function() {
+    shouldReconnect = false; // Disable reconnection when page is closing
     stopConnTimer();
     stopClientKeepAlive();
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     if (ws) ws.close();
 };
 </script>
